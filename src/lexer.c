@@ -161,6 +161,10 @@ static Token LexIdentifier(Lexer* lexer) {
         return MakeToken(lexer, TOKEN_KEYWORD_BOOL);
     }
 
+    if (MatchN(lexer, "string", length)) {
+        return MakeToken(lexer, TOKEN_KEYWORD_STRING);
+    }
+
     if (MatchN(lexer, "true", length)) {
         return MakeToken(lexer, TOKEN_BOOL_LIT);
     }

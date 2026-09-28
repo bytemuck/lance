@@ -22,6 +22,7 @@ typedef enum {
     TOKEN_KEYWORD_IMPL_MINIMUM,
     TOKEN_KEYWORD_TYPE, // 'Type'
     TOKEN_KEYWORD_BOOL, // 'bool'
+    TOKEN_KEYWORD_STRING, // 'string'
     TOKEN_KEYWORD_I8,   // 'i8'
     TOKEN_KEYWORD_I16,  // 'i16'
     TOKEN_KEYWORD_I32,  // 'i32'

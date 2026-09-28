@@ -126,27 +126,48 @@ static AstType* ParsePrimitiveType(Parser* parser) {
     }
 
     // Parenthesized type: ( T )
-    if (Match(parser, TOKEN_LPAREN)) {
-        if (Match(parser, TOKEN_RPAREN)) {
-            return CreateNamedTypeAst("()", line, column);
-        }
+	if (Match(parser, TOKEN_LPAREN)) {
+		if (Match(parser, TOKEN_RPAREN)) {
+			return CreateNamedTypeAst("()", line, column);
+		}
 
-        if (Check(parser, TOKEN_IDENT) && CheckPeek(parser, TOKEN_IDENT)) {
-            const char* ifaceName = CopyTokenString(parser, parser->current);
-            Advance(parser);
-            const char* paramName = CopyTokenString(parser, parser->current);
-            Advance(parser);
+		// Check if this begins an interface constraint list: (Ident Ident, ...)
+		if (Check(parser, TOKEN_IDENT) && CheckPeek(parser, TOKEN_IDENT)) {
+			size_t capacity = 4;
+			size_t count = 0;
+			AstConstraint* constraints = ALLOCATE(AstConstraint, capacity);
 
-            Consume(parser, TOKEN_RPAREN, "Expected ')' after interface constraint");
+			while (Check(parser, TOKEN_IDENT) && CheckPeek(parser, TOKEN_IDENT)) {
+				const char* ifaceName = CopyTokenString(parser, parser->current);
+				Advance(parser);
+				const char* paramName = CopyTokenString(parser, parser->current);
+				Advance(parser);
 
-            return CreateConstrainedTypeAst(ifaceName, paramName, nullptr, line, column);
-        }
+				if (count >= capacity) {
+					size_t oldCap = capacity;
+					capacity = GROW_CAPACITY(capacity);
+					constraints = GROW_ARRAY(AstConstraint, constraints, oldCap, capacity);
+				}
 
-        AstType* inner = ParseType(parser);
-        Consume(parser, TOKEN_RPAREN, "Expected ')' after parenthesized type");
+				constraints[count++] = (AstConstraint){
+					.interfaceName = ifaceName,
+					.typeParam = paramName
+				};
 
-        return inner;
-    }
+				if (!Match(parser, TOKEN_COMMA)) {
+					break;
+				}
+			}
+
+			Consume(parser, TOKEN_RPAREN, "Expected ')' after interface constraints");
+
+			return CreateConstrainedTypeAst(constraints, count, nullptr, line, column);
+		}
+
+		AstType* inner = ParseType(parser);
+		Consume(parser, TOKEN_RPAREN, "Expected ')' after parenthesized type");
+		return inner;
+	}
 
     fprintf(stderr, "[%u:%u] Syntax Error: Expected type, got '%s'\n", line, column, TokenTypeToString(parser->current.type));
     parser->hadError = true;
@@ -174,7 +195,7 @@ static AstType* ParseType(Parser* parser) {
     // T1 -> T2
     if (Match(parser, TOKEN_ARROW)) {
         AstType* right = ParseType(parser);
-        return CreateFunctionTypeAst(left, right, left->line, left->column);
+        return CreateFunctionTypeAst(left, right, line, column);
     }
 
     return left;

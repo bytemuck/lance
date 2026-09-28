@@ -9,6 +9,11 @@
 #include "typed_ast.h"
 
 typedef struct {
+	const char* typeParam;      // e.g. "T"
+	const AstDecl* instanceDecl; // e.g. Numeric Vec2 instance
+} InstanceBinding;
+
+typedef struct {
     const char* interfaceName;
     const LanceType* targetType;
     AstDecl* instanceDecl;

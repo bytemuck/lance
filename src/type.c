@@ -21,9 +21,10 @@ static LanceType gTypeF32 = { .kind = TYPE_F32, .id = 8 };
 static LanceType gTypeF64 = { .kind = TYPE_F64, .id = 9 };
 
 static LanceType gTypeBool = { .kind = TYPE_BOOL, .id = 10 };
-static LanceType gTypeUnit = { .kind = TYPE_UNIT, .id = 11 };
+static LanceType gTypeString = { .kind = TYPE_STRING, .id = 11 };
+static LanceType gTypeUnit = { .kind = TYPE_UNIT, .id = 12 };
 
-static LanceType gTypeType = { .kind = TYPE_TYPE, .id = 12 };
+static LanceType gTypeType = { .kind = TYPE_TYPE, .id = 13 };
 
 #define INITIAL_NEXT_ID 15
 static uint64_t gNextTypeId = INITIAL_NEXT_ID;
@@ -39,6 +40,7 @@ LanceType* GetTypeU64() { return &gTypeU64; }
 LanceType* GetTypeF32() { return &gTypeF32; }
 LanceType* GetTypeF64() { return &gTypeF64; }
 LanceType* GetTypeBool() { return &gTypeBool; }
+LanceType* GetTypeString() { return &gTypeString; }
 LanceType* GetTypeUnit() { return &gTypeUnit; }
 LanceType* GetTypeType() { return &gTypeType; }
 
@@ -56,6 +58,7 @@ LanceType* GetPrimitiveTypeByName(const char* name) {
     if (strcmp(name, "f32") == 0) return &gTypeF32;
     if (strcmp(name, "f64") == 0) return &gTypeF64;
     if (strcmp(name, "bool") == 0) return &gTypeBool;
+    if (strcmp(name, "string") == 0) return &gTypeString;
     if (strcmp(name, "()") == 0) return &gTypeUnit;
     if (strcmp(name, "type") == 0 || strcmp(name, "Type") == 0) return &gTypeType;
 
@@ -129,6 +132,7 @@ const char* TypeToString(const LanceType* type) {
         case TYPE_F32: return "f32";
         case TYPE_F64: return "f64";
         case TYPE_BOOL: return "bool";
+        case TYPE_STRING: return "string";
         case TYPE_UNIT: return "()";
         case TYPE_TYPE: return "type";
         case TYPE_FUNCTION: return "<function>";

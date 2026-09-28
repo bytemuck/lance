@@ -17,6 +17,7 @@ const char* TokenTypeToString(const TokenType type) {
         // Keywords
         case TOKEN_KEYWORD_TYPE: return "TOKEN_KEYWORD_TYPE";
         case TOKEN_KEYWORD_BOOL: return "TOKEN_KEYWORD_BOOL";
+        case TOKEN_KEYWORD_STRING: return "TOKEN_KEYWORD_STRING";
         case TOKEN_KEYWORD_I8:   return "TOKEN_KEYWORD_I8";
         case TOKEN_KEYWORD_I16:  return "TOKEN_KEYWORD_I16";
         case TOKEN_KEYWORD_I32:  return "TOKEN_KEYWORD_I32";

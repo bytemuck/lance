@@ -73,6 +73,9 @@ Numeric f32 = .{
 addCustom :: (Numeric T) => T -> T -> T
 addCustom a b = T.add a b
 
+scalar :: (Numeric T, Numeric U) => T -> U -> U
+scalar i v = newVec (T.mul v.x i) (T.mul v.y i)
+
 vec2Add :: Vec2 -> Vec2 -> Vec2
 vec2Add a b = .{
     x = + a.x b.x
@@ -118,10 +121,22 @@ v3 = addCustom v1 v2
 v4 :: f32
 v4 = addCustom 2.5 7.2
 
--- 11. Main Entry Point
--- Computes (pSum.x * 2.0) + 10.0 -> (4.0 * 2.0) + 10.0 = 18.0
+v5 :: Vec2
+v5 = scalar 3.0 v3
+
+-- 11. Built-in I/O
+greeting :: string
+greeting = "Hello from Lance!"
+
+printedGreeting :: ()
+printedGreeting = print greeting
+
+printedVector :: ()
+printedVector = print v3
+
+-- 12. Main Entry Point
 main :: Vec2
 main = .{
     x = v4
-  , y = v3.y
+  , y = v5.y
 }

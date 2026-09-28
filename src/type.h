@@ -21,6 +21,7 @@ typedef enum {
     TYPE_F32,
     TYPE_F64,
     TYPE_BOOL,
+    TYPE_STRING,
     TYPE_UNIT, // ()
 
     // Meta-type: The type of types ('type')
@@ -69,6 +70,7 @@ LanceType* GetTypeU64();
 LanceType* GetTypeF32();
 LanceType* GetTypeF64();
 LanceType* GetTypeBool();
+LanceType* GetTypeString();
 LanceType* GetTypeUnit();
 LanceType* GetTypeType();
 

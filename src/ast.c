@@ -1,5 +1,7 @@
 #include "ast.h"
 
+#include "memory.h"
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -21,11 +23,11 @@ AstType* CreateFunctionTypeAst(AstType* paramType, AstType* returnType, uint32_t
     return node;
 }
 
-AstType* CreateConstrainedTypeAst(const char* ifaceName, const char* paramName, AstType* targetType, const uint32_t line, const uint32_t column) {
+AstType* CreateConstrainedTypeAst(AstConstraint* constraints, const size_t count, AstType* targetType, const uint32_t line, const uint32_t column) {
     AstType* node = AllocateTypeNode(AST_TYPE_CONSTRAINED, line, column);
     if (!node) return nullptr;
-    node->constrained.interfaceName = ifaceName;
-    node->constrained.typeParam = paramName;
+    node->constrained.constraints = constraints;
+    node->constrained.constraintCount = count;
     node->constrained.targetType = targetType;
     return node;
 }
@@ -49,7 +51,10 @@ void FreeTypeAst(AstType* type) {
             }
             break;
         case AST_TYPE_CONSTRAINED:
-            FreeTypeAst(type->constrained.targetType);
+    		if (type->constrained.constraints) {
+    			FREE_ARRAY(AstConstraint, type->constrained.constraints, type->constrained.constraintCount);
+    		}
+    		FreeTypeAst(type->constrained.targetType);
             break;
     }
 

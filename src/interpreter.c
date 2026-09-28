@@ -139,6 +139,19 @@ static Value* NativeGte(Interpreter* interp, size_t argc, Value** args) {
     return MakeBoolValue(false);
 }
 
+static Value* NativePrint(Interpreter* interp, size_t argc, Value** args) {
+    (void)interp;
+    if (argc > 0 && args[0]) {
+        if (args[0]->kind == VAL_STRING) {
+            printf("%s\n", args[0]->stringVal);
+        } else {
+            PrintValue(args[0]);
+            printf("\n");
+        }
+    }
+    return MakeUnitValue();
+}
+
 static Value* ApplyFunction(Interpreter* interp, Value* callee, Value* arg) {
     if (!callee) return nullptr;
 
@@ -291,6 +304,7 @@ void InitializeInterpreter(Interpreter* interp) {
     EnvironmentDefine(interp->globals, "<=", MakeNativeFnValue("<=", NativeLte, 2, nullptr, 0));
     EnvironmentDefine(interp->globals, ">",  MakeNativeFnValue(">",  NativeGt,  2, nullptr, 0));
     EnvironmentDefine(interp->globals, ">=", MakeNativeFnValue(">=", NativeGte, 2, nullptr, 0));
+    EnvironmentDefine(interp->globals, "print", MakeNativeFnValue("print", NativePrint, 1, nullptr, 0));
 }
 
 void FreeInterpreter(Interpreter* interp) {

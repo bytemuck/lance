@@ -41,6 +41,9 @@ void InitializeCompiler(Compiler* compiler) {
     SymbolTableInsert(compiler->globals, "<=", f32_cmp, nullptr, false);
     SymbolTableInsert(compiler->globals, ">", f32_cmp, nullptr, false);
     SymbolTableInsert(compiler->globals, ">=", f32_cmp, nullptr, false);
+
+    // Register built-in print
+    SymbolTableInsert(compiler->globals, "print", nullptr, nullptr, false);
 }
 
 void FreeCompiler(Compiler* compiler) {
@@ -99,18 +102,20 @@ static LanceType* ResolveAstType(Compiler* compiler, const AstType* astType, con
             return TrackType(compiler, CreateStructType(nullptr, fields, astType->structType.fieldCount));
         }
 
-        case AST_TYPE_CONSTRAINED: {
-            if (SymbolTableLookup(scope, astType->constrained.typeParam)) {
-                return ResolveAstType(compiler, astType->constrained.targetType, scope);
-            }
+    	case AST_TYPE_CONSTRAINED: {
+    		SymbolTable* genericScope = CreateSymbolTable((SymbolTable*)scope);
 
-            SymbolTable* genericScope = CreateSymbolTable((SymbolTable*)scope);
-            SymbolTableInsert(genericScope, astType->constrained.typeParam, GetTypeType(), nullptr, false);
+    		for (size_t i = 0; i < astType->constrained.constraintCount; i++) {
+    			const char* param = astType->constrained.constraints[i].typeParam;
+    			if (!SymbolTableLookup(genericScope, param)) {
+    				SymbolTableInsert(genericScope, param, GetTypeType(), nullptr, false);
+    			}
+    		}
 
-            LanceType* resolved = ResolveAstType(compiler, astType->constrained.targetType, genericScope);
-            FreeSymbolTable(genericScope);
-            return resolved;
-        }
+    		LanceType* resolved = ResolveAstType(compiler, astType->constrained.targetType, genericScope);
+    		FreeSymbolTable(genericScope);
+    		return resolved;
+    	}
     }
 
     return nullptr;
@@ -215,20 +220,26 @@ static const AstExpr* FindInstanceMethod(const AstDecl* instanceDecl, const char
     return nullptr;
 }
 
-static AstExpr* CloneAndSpecializeAstExpr(const AstExpr* expr, const char* typeParam, const AstDecl* instanceDecl) {
+static AstExpr* CloneAndSpecializeExpr(const AstExpr* expr, const InstanceBinding* bindings, size_t bindingCount) {
     if (!expr) return nullptr;
 
     switch (expr->kind) {
         case AST_EXPR_FIELD_ACCESS: {
-            if (expr->fieldAccess.target->kind == AST_EXPR_IDENT &&
-                strcmp(expr->fieldAccess.target->identName, typeParam) == 0) {
-                const AstExpr* methodExpr = FindInstanceMethod(instanceDecl, expr->fieldAccess.fieldName);
-                if (methodExpr) {
-                    return CloneAndSpecializeAstExpr(methodExpr, typeParam, instanceDecl);
+            if (expr->fieldAccess.target->kind == AST_EXPR_IDENT) {
+                const char* targetName = expr->fieldAccess.target->identName;
+
+                // Match against all active instance bindings (T, U, etc.)
+                for (size_t i = 0; i < bindingCount; i++) {
+                    if (strcmp(targetName, bindings[i].typeParam) == 0) {
+                        const AstExpr* method = FindInstanceMethod(bindings[i].instanceDecl, expr->fieldAccess.fieldName);
+                        if (method) {
+                            return CloneAndSpecializeExpr(method, bindings, bindingCount);
+                        }
+                    }
                 }
             }
             return CreateFieldAccessExpr(
-                CloneAndSpecializeAstExpr(expr->fieldAccess.target, typeParam, instanceDecl),
+                CloneAndSpecializeExpr(expr->fieldAccess.target, bindings, bindingCount),
                 expr->fieldAccess.fieldName,
                 expr->line, expr->column
             );
@@ -236,28 +247,29 @@ static AstExpr* CloneAndSpecializeAstExpr(const AstExpr* expr, const char* typeP
 
         case AST_EXPR_CALL:
             return CreateCallExpr(
-                CloneAndSpecializeAstExpr(expr->call.callee, typeParam, instanceDecl),
-                CloneAndSpecializeAstExpr(expr->call.argument, typeParam, instanceDecl),
+                CloneAndSpecializeExpr(expr->call.callee, bindings, bindingCount),
+                CloneAndSpecializeExpr(expr->call.argument, bindings, bindingCount),
                 expr->line, expr->column
             );
 
         case AST_EXPR_STRUCT_VALUE: {
-            size_t count = expr->structValue.fieldCount;
+            const size_t count = expr->structValue.fieldCount;
             AstFieldValue* fields = ALLOCATE(AstFieldValue, count);
             for (size_t i = 0; i < count; i++) {
                 fields[i].name = expr->structValue.fields[i].name;
-                fields[i].value = CloneAndSpecializeAstExpr(expr->structValue.fields[i].value, typeParam, instanceDecl);
+                fields[i].value = CloneAndSpecializeExpr(expr->structValue.fields[i].value, bindings, bindingCount);
             }
             return CreateStructValueExpr(fields, count, expr->line, expr->column);
         }
 
-        case AST_EXPR_INT_LIT:   return CreateIntLitExpr(expr->intVal, expr->line, expr->column);
-        case AST_EXPR_FLOAT_LIT: return CreateFloatLitExpr(expr->floatVal, expr->line, expr->column);
-        case AST_EXPR_BOOL_LIT:  return CreateBoolLitExpr(expr->boolVal, expr->line, expr->column);
+        // Literals and leaves clone directly
+        case AST_EXPR_INT_LIT:    return CreateIntLitExpr(expr->intVal, expr->line, expr->column);
+        case AST_EXPR_FLOAT_LIT:  return CreateFloatLitExpr(expr->floatVal, expr->line, expr->column);
+        case AST_EXPR_BOOL_LIT:   return CreateBoolLitExpr(expr->boolVal, expr->line, expr->column);
         case AST_EXPR_STRING_LIT: return CreateStringLitExpr(expr->stringVal, expr->line, expr->column);
-        case AST_EXPR_IDENT:     return CreateIdentExpr(expr->identName, expr->line, expr->column);
-        case AST_EXPR_TYPE:      return CreateTypeExpr(expr->typeExpr, expr->line, expr->column);
-        case AST_EXPR_COMPTIME:  return CreateComptimeExpr(CloneAndSpecializeAstExpr(expr->comptime.inner, typeParam, instanceDecl), expr->line, expr->column);
+        case AST_EXPR_IDENT:      return CreateIdentExpr(expr->identName, expr->line, expr->column);
+        case AST_EXPR_TYPE:       return CreateTypeExpr(expr->typeExpr, expr->line, expr->column);
+        case AST_EXPR_COMPTIME:   return CreateComptimeExpr(CloneAndSpecializeExpr(expr->comptime.inner, bindings, bindingCount), expr->line, expr->column);
 
         default:
             return nullptr;
@@ -275,29 +287,96 @@ static void AppendTypedDecl(TypedModule* module, TypedDecl decl) {
     module->declarations[module->count++] = decl;
 }
 
-static const char* MonomorphizeGenericFunction(Compiler* compiler, const Symbol* symbol, LanceType* concreteArgType, const SymbolTable* scope, uint32_t line, uint32_t column) {
+static void DeduceTypeParam(const AstType* astParamType, LanceType* concreteType, Table* typeParamMap) {
+    if (!astParamType || !concreteType) return;
+
+    if (astParamType->kind == AST_TYPE_NAMED) {
+        if (!GetPrimitiveTypeByName(astParamType->named.name)) {
+            TableSet(typeParamMap, astParamType->named.name, concreteType);
+        }
+    } else if (astParamType->kind == AST_TYPE_FUNCTION && concreteType->kind == TYPE_FUNCTION) {
+        DeduceTypeParam(astParamType->function.paramType, concreteType->function.paramType, typeParamMap);
+        DeduceTypeParam(astParamType->function.returnType, concreteType->function.returnType, typeParamMap);
+    }
+}
+
+static const char* MonomorphizeGenericFunction(Compiler* compiler, const Symbol* symbol, TypedExpr** loweredArgs, size_t argCount, const SymbolTable* scope, uint32_t line, uint32_t column) {
     const AstDecl* typeDecl = symbol->typeDecl;
     const AstDecl* valueDecl = symbol->valueDecl;
     const AstType* constrType = typeDecl->typeAnnotation;
-    const char* ifaceName = constrType->constrained.interfaceName;
     const char* symName = symbol->name;
+    const AstType* targetType = constrType->constrained.targetType;
 
-    const AstDecl* instance = LookupInstance(&compiler->instances, ifaceName, concreteArgType);
-    if (!instance) {
-        fprintf(stderr, "[%u:%u] Type Error: Type '%s' does not implement interface '%s'\n",
-                line, column, TypeToString(concreteArgType), ifaceName);
-        compiler->hadError = true;
-        return nullptr;
+    Table typeParamMap;
+    TableInit(&typeParamMap);
+
+    const AstType* curAstSig = targetType;
+    for (size_t i = 0; i < argCount; i++) {
+        if (curAstSig && curAstSig->kind == AST_TYPE_FUNCTION) {
+            DeduceTypeParam(curAstSig->function.paramType, loweredArgs[i]->type, &typeParamMap);
+            curAstSig = curAstSig->function.returnType;
+        }
     }
 
-    char specName[128];
-    snprintf(specName, sizeof(specName), "%s$%s", symName, TypeToString(concreteArgType));
+    const size_t constraintCount = constrType->constrained.constraintCount;
+    const AstConstraint* constraints = constrType->constrained.constraints;
+
+    InstanceBinding* bindings = ALLOCATE(InstanceBinding, constraintCount);
+    for (size_t i = 0; i < constraintCount; i++) {
+        const char* ifaceName = constraints[i].interfaceName;
+        const char* typeParam = constraints[i].typeParam;
+        LanceType* concreteType = (LanceType*)TableGet(&typeParamMap, typeParam);
+
+        if (!concreteType) {
+            fprintf(stderr, "[%u:%u] Type Error: Could not deduce type parameter '%s' for generic function '%s'\n",
+                    line, column, typeParam, symName);
+            compiler->hadError = true;
+            TableFree(&typeParamMap);
+            FREE_ARRAY(InstanceBinding, bindings, constraintCount);
+            return nullptr;
+        }
+
+        const AstDecl* instance = LookupInstance(&compiler->instances, ifaceName, concreteType);
+        if (!instance) {
+            fprintf(stderr, "[%u:%u] Type Error: Type '%s' does not implement interface '%s'\n",
+                    line, column, TypeToString(concreteType), ifaceName);
+            compiler->hadError = true;
+            TableFree(&typeParamMap);
+            FREE_ARRAY(InstanceBinding, bindings, constraintCount);
+            return nullptr;
+        }
+        bindings[i] = (InstanceBinding){
+            .typeParam = typeParam,
+            .instanceDecl = instance
+        };
+    }
+
+    char specName[256];
+    int offset = snprintf(specName, sizeof(specName), "%s", symName);
+    for (size_t i = 0; i < constraintCount; i++) {
+        LanceType* concreteType = (LanceType*)TableGet(&typeParamMap, constraints[i].typeParam);
+        offset += snprintf(specName + offset, sizeof(specName) - (size_t)offset, "$%s", TypeToString(concreteType));
+    }
     const char* internedSpecName = InternCString(specName);
 
     Symbol* existingSpec = SymbolTableLookup(compiler->globals, internedSpecName);
     if (!existingSpec) {
-        AstExpr* specializedBody = CloneAndSpecializeAstExpr(valueDecl->body, constrType->constrained.typeParam, instance);
-        LanceType* specSig = InstantiateGenericType(compiler, constrType->constrained.targetType, constrType->constrained.typeParam, concreteArgType, scope);
+        AstExpr* specializedBody = CloneAndSpecializeExpr(valueDecl->body, bindings, constraintCount);
+
+        SymbolTable* instScope = CreateSymbolTable((SymbolTable*)scope);
+        for (size_t i = 0; i < constraintCount; i++) {
+            LanceType* concreteType = (LanceType*)TableGet(&typeParamMap, constraints[i].typeParam);
+            SymbolTableInsert(instScope, constraints[i].typeParam, concreteType, nullptr, false);
+        }
+        LanceType* specSig = ResolveAstType(compiler, targetType, instScope);
+        FreeSymbolTable(instScope);
+
+        if (!specSig) {
+            FreeExprAst(specializedBody);
+            TableFree(&typeParamMap);
+            FREE_ARRAY(InstanceBinding, bindings, constraintCount);
+            return nullptr;
+        }
 
         SymbolTableInsert(compiler->globals, internedSpecName, specSig, nullptr, false);
 
@@ -316,6 +395,12 @@ static const char* MonomorphizeGenericFunction(Compiler* compiler, const Symbol*
 
         // Clean up specializedBody
         FreeExprAst(specializedBody);
+
+        if (!loweredBody || compiler->hadError) {
+            TableFree(&typeParamMap);
+            FREE_ARRAY(InstanceBinding, bindings, constraintCount);
+            return nullptr;
+        }
 
         const char** paramsCopy = nullptr;
         if (valueDecl->paramCount > 0) {
@@ -339,6 +424,8 @@ static const char* MonomorphizeGenericFunction(Compiler* compiler, const Symbol*
         existingSpec = SymbolTableLookup(compiler->globals, internedSpecName);
     }
 
+    TableFree(&typeParamMap);
+    FREE_ARRAY(InstanceBinding, bindings, constraintCount);
     return existingSpec ? existingSpec->name : nullptr;
 }
 
@@ -356,9 +443,14 @@ static TypedExpr* LowerExpr(Compiler* compiler, const AstExpr* expr, const Symbo
             return CreateTypedBoolLitExpr(expr->boolVal, GetTypeBool(), expr->line, expr->column);
 
         case AST_EXPR_STRING_LIT:
-            return CreateTypedStringLitExpr(expr->stringVal, GetTypeUnit(), expr->line, expr->column);
+            return CreateTypedStringLitExpr(expr->stringVal, GetTypeString(), expr->line, expr->column);
 
         case AST_EXPR_IDENT: {
+            if (strcmp(expr->identName, "print") == 0) {
+                LanceType* printType = expectedType ? expectedType : TrackType(compiler, CreateFunctionType(GetTypeString(), GetTypeUnit()));
+                return CreateTypedVarExpr(InternCString("print"), printType, expr->line, expr->column);
+            }
+
             LanceType* prim = GetPrimitiveTypeByName(expr->identName);
             if (prim) {
                 return CreateTypedVarExpr(expr->identName, GetTypeType(), expr->line, expr->column);
@@ -432,23 +524,78 @@ static TypedExpr* LowerExpr(Compiler* compiler, const AstExpr* expr, const Symbo
         }
 
         case AST_EXPR_CALL: {
-            // Check if callee is a constrained generic function (e.g. addCustom)
-            if (expr->call.callee->kind == AST_EXPR_IDENT) {
-                const Symbol* sym = SymbolTableLookup(scope, expr->call.callee->identName);
+            if (expr->call.callee->kind == AST_EXPR_IDENT && strcmp(expr->call.callee->identName, "print") == 0) {
+                TypedExpr* arg = LowerExpr(compiler, expr->call.argument, scope, nullptr);
+                if (!arg) return nullptr;
+
+                LanceType* printFnType = TrackType(compiler, CreateFunctionType(arg->type, GetTypeUnit()));
+                TypedExpr* callee = CreateTypedVarExpr(InternCString("print"), printFnType, expr->call.callee->line, expr->call.callee->column);
+                return CreateTypedCallExpr(callee, arg, GetTypeUnit(), expr->line, expr->column);
+            }
+
+            // Check if call tree originates from a constrained generic function
+            const AstExpr* root = expr;
+            size_t callDepth = 0;
+            while (root->kind == AST_EXPR_CALL) {
+                callDepth++;
+                root = root->call.callee;
+            }
+
+            if (root->kind == AST_EXPR_IDENT) {
+                const Symbol* sym = SymbolTableLookup(scope, root->identName);
 
                 if (sym && sym->typeDecl && sym->typeDecl->typeAnnotation &&
                     sym->typeDecl->typeAnnotation->kind == AST_TYPE_CONSTRAINED) {
                     
-                    TypedExpr* loweredArg = LowerExpr(compiler, expr->call.argument, scope, nullptr);
-                    if (!loweredArg) return nullptr;
+                    const AstExpr** argExprs = ALLOCATE(const AstExpr*, callDepth);
+                    const AstExpr* curr = expr;
+                    for (size_t i = callDepth; i > 0; i--) {
+                        argExprs[i - 1] = curr->call.argument;
+                        curr = curr->call.callee;
+                    }
 
-                    const char* specName = MonomorphizeGenericFunction(compiler, sym, loweredArg->type, scope, expr->line, expr->column);
-                    if (!specName) return nullptr;
+                    TypedExpr** loweredArgs = ALLOCATE(TypedExpr*, callDepth);
+                    bool argError = false;
+                    for (size_t i = 0; i < callDepth; i++) {
+                        loweredArgs[i] = LowerExpr(compiler, argExprs[i], scope, nullptr);
+                        if (!loweredArgs[i]) argError = true;
+                    }
+
+                    FREE_ARRAY(const AstExpr*, argExprs, callDepth);
+
+                    if (argError) {
+                        FREE_ARRAY(TypedExpr*, loweredArgs, callDepth);
+                        return nullptr;
+                    }
+
+                    const char* specName = MonomorphizeGenericFunction(compiler, sym, loweredArgs, callDepth, scope, expr->line, expr->column);
+                    if (!specName) {
+                        FREE_ARRAY(TypedExpr*, loweredArgs, callDepth);
+                        return nullptr;
+                    }
 
                     const Symbol* specSym = SymbolTableLookup(compiler->globals, specName);
-                    TypedExpr* specCallee = CreateTypedVarExpr(specSym->name, specSym->type, expr->line, expr->column);
+                    if (!specSym || !specSym->type) {
+                        FREE_ARRAY(TypedExpr*, loweredArgs, callDepth);
+                        return nullptr;
+                    }
 
-                    return CreateTypedCallExpr(specCallee, loweredArg, specSym->type->function.returnType, expr->line, expr->column);
+                    TypedExpr* specCallee = CreateTypedVarExpr(specSym->name, specSym->type, root->line, root->column);
+                    LanceType* curSig = specSym->type;
+
+                    for (size_t i = 0; i < callDepth; i++) {
+                        if (!curSig || curSig->kind != TYPE_FUNCTION) {
+                            fprintf(stderr, "[%u:%u] Type Error: Too many arguments in call\n", expr->line, expr->column);
+                            compiler->hadError = true;
+                            FREE_ARRAY(TypedExpr*, loweredArgs, callDepth);
+                            return nullptr;
+                        }
+                        specCallee = CreateTypedCallExpr(specCallee, loweredArgs[i], curSig->function.returnType, expr->line, expr->column);
+                        curSig = curSig->function.returnType;
+                    }
+
+                    FREE_ARRAY(TypedExpr*, loweredArgs, callDepth);
+                    return specCallee;
                 }
             }
 

@@ -10,6 +10,11 @@
 
 #include "token.h"
 
+typedef struct {
+	const char* interfaceName;
+	const char* typeParam;
+} AstConstraint;
+
 typedef enum {
     AST_TYPE_NAMED,       // e.g. 'i32', 'Vec2'
     AST_TYPE_FUNCTION,    // e.g. 'T1 -> T2'
@@ -49,8 +54,8 @@ struct AstType {
 
         // AST_TYPE_CONSTRAINED
         struct {
-            const char* interfaceName; // e.g. "Numeric"
-            const char* typeParam;     // e.g. "T"
+        	AstConstraint* constraints;
+        	size_t constraintCount;
             AstType* targetType;
         } constrained;
     };
@@ -149,7 +154,7 @@ typedef struct {
 AstType* CreateNamedTypeAst(const char* name, uint32_t line, uint32_t column);
 AstType* CreateFunctionTypeAst(AstType* paramType, AstType* returnType, uint32_t line, uint32_t column);
 AstType* CreateStructTypeAst(AstFieldDecl* fields, size_t fieldCount, uint32_t line, uint32_t column);
-AstType* CreateConstrainedTypeAst(const char* ifaceName, const char* paramName, AstType* returnType, uint32_t line, uint32_t column);
+AstType* CreateConstrainedTypeAst(AstConstraint* constraints, size_t count, AstType* targetType, uint32_t line, uint32_t column);
 void FreeTypeAst(AstType* type);
 
 AstExpr* CreateIntLitExpr(int64_t value, uint32_t line, uint32_t column);
