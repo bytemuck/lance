@@ -217,6 +217,8 @@ void FreeDeclAst(AstDecl* decl) {
     }
 
     switch (decl->kind) {
+        case AST_DECL_IMPORT:
+            break;
         case AST_DECL_TYPE_ANNOTATION:
             FreeTypeAst(decl->typeAnnotation);
             decl->typeAnnotation = nullptr;

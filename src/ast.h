@@ -128,6 +128,7 @@ struct AstExpr {
 };
 
 typedef enum {
+    AST_DECL_IMPORT,          // import "module.lance"
     AST_DECL_TYPE_ANNOTATION, // name :: Type
     AST_DECL_BINDING,         // name arg1 ... = body
 } AstDeclKind;
@@ -141,6 +142,7 @@ typedef struct {
     uint32_t column;
 
     union {
+        const char* modulePath;
         AstType* typeAnnotation;
         AstExpr* body;
     };

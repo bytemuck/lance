@@ -1,0 +1,275 @@
+Numeric :: type -> type
+Numeric T = {
+    (+) :: T -> T -> T
+  , (-) :: T -> T -> T
+  , (*) :: T -> T -> T
+}
+
+Integral :: type -> type
+Integral T = {
+    (//) :: T -> T -> T
+}
+
+Fractional :: type -> type
+Fractional T = {
+    (/) :: T -> T -> T
+}
+
+Eq :: type -> type
+Eq T = {
+    (==) :: T -> T -> bool
+  , (!=) :: T -> T -> bool
+}
+
+Ord :: type -> type
+Ord T = {
+    (<) :: T -> T -> bool
+  , (<=) :: T -> T -> bool
+  , (>) :: T -> T -> bool
+  , (>=) :: T -> T -> bool
+}
+
+Numeric i8 :: type
+Numeric i8 = .{
+    (+) = @builtin_add
+  , (-) = @builtin_sub
+  , (*) = @builtin_mul
+}
+
+Eq i8 = .{
+    (==) = @builtin_eq
+  , (!=) = @builtin_neq
+}
+
+Ord i8 = .{
+    (<) = @builtin_lt
+  , (<=) = @builtin_lte
+  , (>) = @builtin_gt
+  , (>=) = @builtin_gte
+}
+
+Integral :: type
+Integral i8 = {
+    (//) :: @builtin_div
+}
+
+Numeric i16 :: type
+Numeric i16 = .{
+    (+) = @builtin_add
+  , (-) = @builtin_sub
+  , (*) = @builtin_mul
+}
+
+Eq i16 = .{
+    (==) = @builtin_eq
+  , (!=) = @builtin_neq
+}
+
+Ord i16 = .{
+    (<) = @builtin_lt
+  , (<=) = @builtin_lte
+  , (>) = @builtin_gt
+  , (>=) = @builtin_gte
+}
+
+Integral :: type
+Integral i16 = {
+    (//) :: @builtin_div
+}
+
+Numeric i32 :: type
+Numeric i32 = .{
+    (+) = @builtin_add
+  , (-) = @builtin_sub
+  , (*) = @builtin_mul
+}
+
+Eq i32 = .{
+    (==) = @builtin_eq
+  , (!=) = @builtin_neq
+}
+
+Ord i32 = .{
+    (<) = @builtin_lt
+  , (<=) = @builtin_lte
+  , (>) = @builtin_gt
+  , (>=) = @builtin_gte
+}
+
+Integral :: type
+Integral i32 = {
+    (//) :: @builtin_div
+}
+
+Numeric i64 :: type
+Numeric i64 = .{
+    (+) = @builtin_add
+  , (-) = @builtin_sub
+  , (*) = @builtin_mul
+}
+
+Eq i64 = .{
+    (==) = @builtin_eq
+  , (!=) = @builtin_neq
+}
+
+Ord i64 = .{
+    (<) = @builtin_lt
+  , (<=) = @builtin_lte
+  , (>) = @builtin_gt
+  , (>=) = @builtin_gte
+}
+
+Integral :: type
+Integral i64 = {
+    (//) :: @builtin_div
+}
+
+Numeric u8 :: type
+Numeric u8 = .{
+    (+) = @builtin_add
+  , (-) = @builtin_sub
+  , (*) = @builtin_mul
+}
+
+Eq u8 = .{
+    (==) = @builtin_eq
+  , (!=) = @builtin_neq
+}
+
+Ord u8 = .{
+    (<) = @builtin_lt
+  , (<=) = @builtin_lte
+  , (>) = @builtin_gt
+  , (>=) = @builtin_gte
+}
+
+Integral :: type
+Integral u8 = {
+    (//) :: @builtin_div
+}
+
+Numeric u16 :: type
+Numeric u16 = .{
+    (+) = @builtin_add
+  , (-) = @builtin_sub
+  , (*) = @builtin_mul
+}
+
+Eq u16 = .{
+    (==) = @builtin_eq
+  , (!=) = @builtin_neq
+}
+
+Ord u16 = .{
+    (<) = @builtin_lt
+  , (<=) = @builtin_lte
+  , (>) = @builtin_gt
+  , (>=) = @builtin_gte
+}
+
+Integral :: type
+Integral u16 = {
+    (//) :: @builtin_div
+}
+
+Numeric u32 :: type
+Numeric u32 = .{
+    (+) = @builtin_add
+  , (-) = @builtin_sub
+  , (*) = @builtin_mul
+}
+
+Eq u32 = .{
+    (==) = @builtin_eq
+  , (!=) = @builtin_neq
+}
+
+Ord u32 = .{
+    (<) = @builtin_lt
+  , (<=) = @builtin_lte
+  , (>) = @builtin_gt
+  , (>=) = @builtin_gte
+}
+
+Integral :: type
+Integral u32 = {
+    (//) :: @builtin_div
+}
+
+Numeric u64 :: type
+Numeric u64 = .{
+    (+) = @builtin_add
+  , (-) = @builtin_sub
+  , (*) = @builtin_mul
+}
+
+Eq u64 = .{
+    (==) = @builtin_eq
+  , (!=) = @builtin_neq
+}
+
+Ord u64 = .{
+    (<) = @builtin_lt
+  , (<=) = @builtin_lte
+  , (>) = @builtin_gt
+  , (>=) = @builtin_gte
+}
+
+Integral :: type
+Integral u64 = {
+    (//) :: @builtin_div
+}
+
+Numeric f32 :: type
+Numeric f32 = .{
+    (+) = @builtin_add
+  , (-) = @builtin_sub
+  , (*) = @builtin_mul
+}
+
+Eq f32 = .{
+    (==) = @builtin_eq
+  , (!=) = @builtin_neq
+}
+
+Ord f32 = .{
+    (<) = @builtin_lt
+  , (<=) = @builtin_lte
+  , (>) = @builtin_gt
+  , (>=) = @builtin_gte
+}
+
+Fractional :: type
+Fractional f32 = {
+    (/) = @builtin_div
+}
+
+Numeric f64 :: type
+Numeric f64 = .{
+    (+) = @builtin_add
+  , (-) = @builtin_sub
+  , (*) = @builtin_mul
+}
+
+Eq f64 = .{
+    (==) = @builtin_eq
+  , (!=) = @builtin_neq
+}
+
+Ord f64 = .{
+    (<) = @builtin_lt
+  , (<=) = @builtin_lte
+  , (>) = @builtin_gt
+  , (>=) = @builtin_gte
+}
+
+Fractional :: type
+Fractional f64 = {
+    (/) = @builtin_div
+}
+
+Eq bool = .{
+    (==) = @builtin_eq
+  , (!=) = @builtin_neq
+}

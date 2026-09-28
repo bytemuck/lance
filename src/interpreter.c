@@ -298,12 +298,22 @@ void InitializeInterpreter(Interpreter* interp) {
     EnvironmentDefine(interp->globals, "-",  MakeNativeFnValue("-",  NativeSub, 2, nullptr, 0));
     EnvironmentDefine(interp->globals, "*",  MakeNativeFnValue("*",  NativeMul, 2, nullptr, 0));
     EnvironmentDefine(interp->globals, "/",  MakeNativeFnValue("/",  NativeDiv, 2, nullptr, 0));
+    EnvironmentDefine(interp->globals, "@builtin_add", MakeNativeFnValue("@builtin_add", NativeAdd, 2, nullptr, 0));
+    EnvironmentDefine(interp->globals, "@builtin_sub", MakeNativeFnValue("@builtin_sub", NativeSub, 2, nullptr, 0));
+    EnvironmentDefine(interp->globals, "@builtin_mul", MakeNativeFnValue("@builtin_mul", NativeMul, 2, nullptr, 0));
+    EnvironmentDefine(interp->globals, "@builtin_div", MakeNativeFnValue("@builtin_div", NativeDiv, 2, nullptr, 0));
     EnvironmentDefine(interp->globals, "==", MakeNativeFnValue("==", NativeEq,  2, nullptr, 0));
     EnvironmentDefine(interp->globals, "!=", MakeNativeFnValue("!=", NativeNeq, 2, nullptr, 0));
     EnvironmentDefine(interp->globals, "<",  MakeNativeFnValue("<",  NativeLt,  2, nullptr, 0));
     EnvironmentDefine(interp->globals, "<=", MakeNativeFnValue("<=", NativeLte, 2, nullptr, 0));
     EnvironmentDefine(interp->globals, ">",  MakeNativeFnValue(">",  NativeGt,  2, nullptr, 0));
     EnvironmentDefine(interp->globals, ">=", MakeNativeFnValue(">=", NativeGte, 2, nullptr, 0));
+    EnvironmentDefine(interp->globals, "@builtin_eq", MakeNativeFnValue("@builtin_eq", NativeEq, 2, nullptr, 0));
+    EnvironmentDefine(interp->globals, "@builtin_neq", MakeNativeFnValue("@builtin_neq", NativeNeq, 2, nullptr, 0));
+    EnvironmentDefine(interp->globals, "@builtin_lt", MakeNativeFnValue("@builtin_lt", NativeLt, 2, nullptr, 0));
+    EnvironmentDefine(interp->globals, "@builtin_lte", MakeNativeFnValue("@builtin_lte", NativeLte, 2, nullptr, 0));
+    EnvironmentDefine(interp->globals, "@builtin_gt", MakeNativeFnValue("@builtin_gt", NativeGt, 2, nullptr, 0));
+    EnvironmentDefine(interp->globals, "@builtin_gte", MakeNativeFnValue("@builtin_gte", NativeGte, 2, nullptr, 0));
     EnvironmentDefine(interp->globals, "print", MakeNativeFnValue("print", NativePrint, 1, nullptr, 0));
 }
 

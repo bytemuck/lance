@@ -51,16 +51,7 @@ typedef enum {
 
     // Prefix Operators (treated as callable symbols)
     TOKEN_OPERATOR_MINIMUM,
-    TOKEN_PLUS,         // +
-    TOKEN_MINUS,        // -
-    TOKEN_STAR,         // *
-    TOKEN_SLASH,        // /
-    TOKEN_EQ_EQ,        // ==
-    TOKEN_BANG_EQ,      // !=
-    TOKEN_LT,           // <
-    TOKEN_LTE,          // <=
-    TOKEN_GT,           // >
-    TOKEN_GTE,          // >=
+    TOKEN_OPERATOR_SYMBOL,
     TOKEN_OPERATOR_MAXIMUM,
 } TokenType;
 

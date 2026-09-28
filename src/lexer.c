@@ -82,6 +82,31 @@ static bool IsAlphaNumeric(const char c) {
     return IsAlpha(c) || IsNumeric(c);
 }
 
+static bool IsOperatorCharacter(const char c) {
+    switch (c) {
+        case '!':
+        case '#':
+        case '$':
+        case '%':
+        case '&':
+        case '*':
+        case '+':
+        case '-':
+        case '/':
+        case '<':
+        case '>':
+        case '?':
+        case '^':
+        case '|':
+        case '~':
+        case '\\':
+        case '=':
+            return true;
+        default:
+            return false;
+    }
+}
+
 static bool Match(Lexer* lexer, const char expected) {
     if (IsEOF(lexer) || lexer->source[lexer->end] != expected) {
         return false;
@@ -226,6 +251,21 @@ Token LexToken(Lexer* lexer) {
         return LexString(lexer);
     }
 
+    if (c == '-' && Match(lexer, '>')) return MakeToken(lexer, TOKEN_ARROW);
+    if (c == '=' && Match(lexer, '>')) return MakeToken(lexer, TOKEN_FAT_ARROW);
+
+    if (c == '=') {
+        if (Match(lexer, '=')) return MakeToken(lexer, TOKEN_OPERATOR_SYMBOL);
+        return MakeToken(lexer, TOKEN_EQUAL);
+    }
+
+    if (IsOperatorCharacter(c)) {
+        while (IsOperatorCharacter(Peek(lexer))) {
+            Advance(lexer);
+        }
+        return MakeToken(lexer, TOKEN_OPERATOR_SYMBOL);
+    }
+
     switch (c) {
         case '(': return MakeToken(lexer, TOKEN_LPAREN);
         case ')': return MakeToken(lexer, TOKEN_RPAREN);
@@ -233,9 +273,6 @@ Token LexToken(Lexer* lexer) {
         case '}': return MakeToken(lexer, TOKEN_RBRACE);
         case ',': return MakeToken(lexer, TOKEN_COMMA);
         case '`': return MakeToken(lexer, TOKEN_BACKTICK);
-        case '+': return MakeToken(lexer, TOKEN_PLUS);
-        case '*': return MakeToken(lexer, TOKEN_STAR);
-        case '/': return MakeToken(lexer, TOKEN_SLASH);
 
         case '@': {
             while (IsAlphaNumeric(Peek(lexer))) {
@@ -248,27 +285,6 @@ Token LexToken(Lexer* lexer) {
         case ':':
             if (Match(lexer, ':')) return MakeToken(lexer, TOKEN_COLON_COLON);
             return MakeToken(lexer, TOKEN_ERROR);
-
-        case '-':
-            if (Match(lexer, '>')) return MakeToken(lexer, TOKEN_ARROW);
-            return MakeToken(lexer, TOKEN_MINUS);
-
-        case '=':
-            if (Match(lexer, '=')) return MakeToken(lexer, TOKEN_EQ_EQ);
-            if (Match(lexer, '>')) return MakeToken(lexer, TOKEN_FAT_ARROW);
-            return MakeToken(lexer, TOKEN_EQUAL);
-
-        case '!':
-            if (Match(lexer, '=')) return MakeToken(lexer, TOKEN_BANG_EQ);
-            return MakeToken(lexer, TOKEN_ERROR);
-
-        case '<':
-            if (Match(lexer, '=')) return MakeToken(lexer, TOKEN_LTE);
-            return MakeToken(lexer, TOKEN_LT);
-
-        case '>':
-            if (Match(lexer, '=')) return MakeToken(lexer, TOKEN_GTE);
-            return MakeToken(lexer, TOKEN_GT);
 
         case '.':
             if (Match(lexer, '{')) return MakeToken(lexer, TOKEN_DOT_LBRACE);

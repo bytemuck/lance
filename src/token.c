@@ -43,17 +43,7 @@ const char* TokenTypeToString(const TokenType type) {
         case TOKEN_COMMA: return "TOKEN_COMMA";
         case TOKEN_BACKTICK: return "TOKEN_BACKTICK";
 
-        // Operators
-        case TOKEN_PLUS: return "TOKEN_PLUS";
-        case TOKEN_MINUS: return "TOKEN_MINUS";
-        case TOKEN_STAR: return "TOKEN_STAR";
-        case TOKEN_SLASH: return "TOKEN_SLASH";
-        case TOKEN_EQ_EQ: return "TOKEN_EQ_EQ";
-        case TOKEN_BANG_EQ: return "TOKEN_BANG_EQ";
-        case TOKEN_LT: return "TOKEN_LT";
-        case TOKEN_LTE: return "TOKEN_LTE";
-        case TOKEN_GT: return "TOKEN_GT";
-        case TOKEN_GTE: return "TOKEN_GTE";
+        case TOKEN_OPERATOR_SYMBOL: return "TOKEN_OPERATOR_SYMBOL";
 
         default: return "UNKNOWN";
     }

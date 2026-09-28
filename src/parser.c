@@ -14,6 +14,12 @@ static const char* CopyTokenString(const Parser* parser, const Token token) {
     return InternString(&parser->lexer->source[token.begin], length);
 }
 
+static const char* CopyStringToken(const Parser* parser, const Token token) {
+    const uint32_t length = token.end - token.begin;
+    if (length < 2) return InternString("", 0);
+    return InternString(&parser->lexer->source[token.begin + 1], length - 2);
+}
+
 static void Advance(Parser* parser) {
     parser->current = parser->peek;
 
@@ -69,6 +75,50 @@ static bool Consume(Parser* parser, const TokenType type, const char* message) {
 
 static AstType* ParseType(Parser* parser);
 
+static bool IsOperatorToken(const TokenType type) {
+    return type == TOKEN_OPERATOR_SYMBOL;
+}
+
+static const char* ParseFieldName(Parser* parser) {
+    if (Check(parser, TOKEN_IDENT)) {
+        const char* fieldName = CopyTokenString(parser, parser->current);
+        Advance(parser);
+        return fieldName;
+    }
+
+    if (Match(parser, TOKEN_LPAREN)) {
+        if (Check(parser, TOKEN_RPAREN) || Check(parser, TOKEN_EOF)) {
+            Consume(parser, TOKEN_IDENT, "Expected operator in parenthesized field name");
+            return nullptr;
+        }
+
+        const char* fieldName = CopyTokenString(parser, parser->current);
+        Advance(parser);
+        Consume(parser, TOKEN_RPAREN, "Expected ')' after operator field name");
+        return fieldName;
+    }
+
+    Consume(parser, TOKEN_IDENT, "Expected field name");
+    return nullptr;
+}
+
+static bool IsLegacyBuiltinStructValue(const Parser* parser) {
+    if (!Check(parser, TOKEN_LBRACE)) return false;
+
+    Parser probe = *parser;
+    Lexer lexer = *parser->lexer;
+    probe.lexer = &lexer;
+    Advance(&probe);
+    if (!ParseFieldName(&probe) ||
+        (!Check(&probe, TOKEN_COLON_COLON) && !Check(&probe, TOKEN_EQUAL))) {
+        return false;
+    }
+
+    Advance(&probe);
+    return Check(&probe, TOKEN_IDENT) &&
+           probe.lexer->source[probe.current.begin] == '@';
+}
+
 static AstType* ParsePrimitiveType(Parser* parser) {
     const uint32_t line = parser->current.line;
     const uint32_t column = parser->current.column;
@@ -96,13 +146,10 @@ static AstType* ParsePrimitiveType(Parser* parser) {
         AstFieldDecl* fields = ALLOCATE(AstFieldDecl, capacity);
 
         while (!Check(parser, TOKEN_RBRACE) && !Check(parser, TOKEN_EOF)) {
-            if (!Check(parser, TOKEN_IDENT)) {
-                Consume(parser, TOKEN_IDENT, "Expected field name in struct type");
+            const char* fieldName = ParseFieldName(parser);
+            if (!fieldName) {
                 break;
             }
-
-            const char* fieldName = CopyTokenString(parser, parser->current);
-            Advance(parser);
 
             Consume(parser, TOKEN_COLON_COLON, "Expected '::' after field name");
             AstType* fieldType = ParseType(parser);
@@ -203,10 +250,6 @@ static AstType* ParseType(Parser* parser) {
 
 static AstExpr* ParseExpr(Parser* parser);
 
-static bool IsOperatorToken(const TokenType type) {
-    return type > TOKEN_OPERATOR_MINIMUM && type < TOKEN_OPERATOR_MAXIMUM;
-}
-
 static bool IsTypeKeywordToken(const TokenType type) {
     return type > TOKEN_KEYWORD_IMPL_MINIMUM && type < TOKEN_KEYWORD_IMPL_MAXIMUM;
 }
@@ -242,7 +285,34 @@ static AstExpr* ParsePrimaryExpr(Parser* parser) {
         const char* identifier = CopyTokenString(parser, parser->current);
         Advance(parser);
         expr = CreateIdentExpr(identifier, line, column);
-    // Anonymous struct
+    // Legacy builtin-backed struct value
+    } else if (IsLegacyBuiltinStructValue(parser)) {
+        Match(parser, TOKEN_LBRACE);
+        size_t capacity = 4;
+        size_t count = 0;
+
+        AstFieldValue* fields = ALLOCATE(AstFieldValue, capacity);
+        while (!Check(parser, TOKEN_RBRACE) && !Check(parser, TOKEN_EOF)) {
+            const char* fieldName = ParseFieldName(parser);
+            if (!fieldName) break;
+
+            if (!Match(parser, TOKEN_EQUAL)) {
+                Consume(parser, TOKEN_COLON_COLON, "Expected '=' or '::' after field name in struct value");
+            }
+            AstExpr* val = ParseExpr(parser);
+
+            if (count >= capacity) {
+                const size_t oldCap = capacity;
+                capacity = GROW_CAPACITY(oldCap);
+                fields = GROW_ARRAY(AstFieldValue, fields, oldCap, capacity);
+            }
+            fields[count++] = (AstFieldValue) { .name = fieldName, .value = val };
+
+            if (!Match(parser, TOKEN_COMMA)) break;
+        }
+        Consume(parser, TOKEN_RBRACE, "Expected '}' after struct value");
+        expr = CreateStructValueExpr(fields, count, line, column);
+    // Anonymous struct type
     } else if (Check(parser, TOKEN_LBRACE)) {
         AstType* type = ParseType(parser);
         expr = CreateTypeExpr(type, line, column);
@@ -254,13 +324,10 @@ static AstExpr* ParsePrimaryExpr(Parser* parser) {
         AstFieldValue* fields = ALLOCATE(AstFieldValue, capacity);
 
         while (!Check(parser, TOKEN_RBRACE) && !Check(parser, TOKEN_EOF)) {
-            if (!Check(parser, TOKEN_IDENT)) {
-                Consume(parser, TOKEN_IDENT, "Expected field name in struct value");
+            const char* fieldName = ParseFieldName(parser);
+            if (!fieldName) {
                 break;
             }
-
-            const char* fieldName = CopyTokenString(parser, parser->current);
-            Advance(parser);
 
             Consume(parser, TOKEN_EQUAL, "Expected '=' after field name in struct value");
             AstExpr* val = ParseExpr(parser);
@@ -297,13 +364,11 @@ static AstExpr* ParsePrimaryExpr(Parser* parser) {
 
     // Postfix field access
     while (Match(parser, TOKEN_DOT)) {
-        if (!Check(parser, TOKEN_IDENT)) {
-            Consume(parser, TOKEN_IDENT, "Expected identifier after '.'");
+        const char* fieldName = ParseFieldName(parser);
+        if (!fieldName) {
             break;
         }
 
-        const char* fieldName = CopyTokenString(parser, parser->current);
-        Advance(parser);
         expr = CreateFieldAccessExpr(expr, fieldName, line, column);
     }
 
@@ -380,19 +445,35 @@ static AstExpr* ParseExpr(Parser* parser) {
     return callee;
 }
 
+static AstDecl ParseImportDeclaration(Parser* parser) {
+    AstDecl decl = {0};
+    decl.kind = AST_DECL_IMPORT;
+    decl.name = CopyTokenString(parser, parser->current);
+    decl.line = parser->current.line;
+    decl.column = parser->current.column;
+    Advance(parser);
+
+    if (!Check(parser, TOKEN_STRING_LIT)) {
+        Consume(parser, TOKEN_STRING_LIT, "Expected module path string after 'import'");
+        return decl;
+    }
+
+    decl.modulePath = CopyStringToken(parser, parser->current);
+    Advance(parser);
+    return decl;
+}
+
 static AstDecl ParseDeclaration(Parser* parser) {
     AstDecl decl = {0};
 
-    if (!Check(parser, TOKEN_IDENT)) {
+    if (!Check(parser, TOKEN_IDENT) && !Check(parser, TOKEN_LPAREN)) {
         Consume(parser, TOKEN_IDENT, "Expected declaration name");
         return decl;
     }
 
-    decl.name = CopyTokenString(parser, parser->current);
     decl.line = parser->current.line;
     decl.column = parser->current.column;
-
-    Advance(parser);
+    decl.name = ParseFieldName(parser);
 
     size_t capacity = 4;
     size_t paramCount = 0;
@@ -442,7 +523,11 @@ AstModule* ParseModule(Parser* parser) {
             module->declarations = GROW_ARRAY(AstDecl, module->declarations, oldCap, capacity);
         }
 
-        module->declarations[module->count++] = ParseDeclaration(parser);
+        if (Check(parser, TOKEN_IDENT) && strcmp(CopyTokenString(parser, parser->current), "import") == 0) {
+            module->declarations[module->count++] = ParseImportDeclaration(parser);
+        } else {
+            module->declarations[module->count++] = ParseDeclaration(parser);
+        }
     }
 
     return module;

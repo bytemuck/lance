@@ -32,6 +32,10 @@ void InitializeCompiler(Compiler* compiler) {
     SymbolTableInsert(compiler->globals, "-", f32_binop, nullptr, false);
     SymbolTableInsert(compiler->globals, "*", f32_binop, nullptr, false);
     SymbolTableInsert(compiler->globals, "/", f32_binop, nullptr, false);
+    SymbolTableInsert(compiler->globals, "@builtin_add", f32_binop, nullptr, false);
+    SymbolTableInsert(compiler->globals, "@builtin_sub", f32_binop, nullptr, false);
+    SymbolTableInsert(compiler->globals, "@builtin_mul", f32_binop, nullptr, false);
+    SymbolTableInsert(compiler->globals, "@builtin_div", f32_binop, nullptr, false);
 
     // Register boolean comparisons
     LanceType* f32_cmp = TrackType(compiler, CreateFunctionType(GetTypeF32(), TrackType(compiler, CreateFunctionType(GetTypeF32(), GetTypeBool()))));
@@ -41,6 +45,12 @@ void InitializeCompiler(Compiler* compiler) {
     SymbolTableInsert(compiler->globals, "<=", f32_cmp, nullptr, false);
     SymbolTableInsert(compiler->globals, ">", f32_cmp, nullptr, false);
     SymbolTableInsert(compiler->globals, ">=", f32_cmp, nullptr, false);
+    SymbolTableInsert(compiler->globals, "@builtin_eq", f32_cmp, nullptr, false);
+    SymbolTableInsert(compiler->globals, "@builtin_neq", f32_cmp, nullptr, false);
+    SymbolTableInsert(compiler->globals, "@builtin_lt", f32_cmp, nullptr, false);
+    SymbolTableInsert(compiler->globals, "@builtin_lte", f32_cmp, nullptr, false);
+    SymbolTableInsert(compiler->globals, "@builtin_gt", f32_cmp, nullptr, false);
+    SymbolTableInsert(compiler->globals, "@builtin_gte", f32_cmp, nullptr, false);
 
     // Register built-in print
     SymbolTableInsert(compiler->globals, "print", nullptr, nullptr, false);
@@ -218,6 +228,30 @@ static const AstExpr* FindInstanceMethod(const AstDecl* instanceDecl, const char
         }
     }
     return nullptr;
+}
+
+static const char* InterfaceForOperator(const char* operatorName) {
+    if (strcmp(operatorName, "+") == 0 ||
+        strcmp(operatorName, "-") == 0 ||
+        strcmp(operatorName, "*") == 0) {
+        return "Numeric";
+    }
+
+    if (strcmp(operatorName, "/") == 0) return "Fractional";
+    if (strcmp(operatorName, "//") == 0) return "Integral";
+    if (strcmp(operatorName, "==") == 0 || strcmp(operatorName, "!=") == 0) return "Eq";
+    if (strcmp(operatorName, "<") == 0 ||
+        strcmp(operatorName, "<=") == 0 ||
+        strcmp(operatorName, ">") == 0 ||
+        strcmp(operatorName, ">=") == 0) {
+        return "Ord";
+    }
+    return nullptr;
+}
+
+static LanceType* CreateBinaryOperatorType(Compiler* compiler, LanceType* valueType, LanceType* resultType) {
+    LanceType* rightToResult = TrackType(compiler, CreateFunctionType(valueType, resultType));
+    return TrackType(compiler, CreateFunctionType(valueType, rightToResult));
 }
 
 static AstExpr* CloneAndSpecializeExpr(const AstExpr* expr, const InstanceBinding* bindings, size_t bindingCount) {
@@ -451,6 +485,22 @@ static TypedExpr* LowerExpr(Compiler* compiler, const AstExpr* expr, const Symbo
                 return CreateTypedVarExpr(InternCString("print"), printType, expr->line, expr->column);
             }
 
+            if (strncmp(expr->identName, "@builtin_", 9) == 0) {
+                const Symbol* builtin = SymbolTableLookup(scope, expr->identName);
+                if (!builtin) {
+                    fprintf(stderr, "[%u:%u] Type Error: Unknown builtin '%s'\n",
+                            expr->line, expr->column, expr->identName);
+                    compiler->hadError = true;
+                    return nullptr;
+                }
+
+                LanceType* builtinType = builtin->type;
+                if (expectedType && expectedType->kind == TYPE_FUNCTION) {
+                    builtinType = expectedType;
+                }
+                return CreateTypedVarExpr(builtin->name, builtinType, expr->line, expr->column);
+            }
+
             LanceType* prim = GetPrimitiveTypeByName(expr->identName);
             if (prim) {
                 return CreateTypedVarExpr(expr->identName, GetTypeType(), expr->line, expr->column);
@@ -543,6 +593,64 @@ static TypedExpr* LowerExpr(Compiler* compiler, const AstExpr* expr, const Symbo
 
             if (root->kind == AST_EXPR_IDENT) {
                 const Symbol* sym = SymbolTableLookup(scope, root->identName);
+
+                const char* interfaceName = callDepth == 2
+                    ? InterfaceForOperator(root->identName)
+                    : nullptr;
+                if (interfaceName) {
+                    const AstExpr* firstCall = expr->call.callee;
+                    const AstExpr* firstArg = firstCall->call.argument;
+                    const AstExpr* secondArg = expr->call.argument;
+                    TypedExpr* loweredFirst = LowerExpr(compiler, firstArg, scope, nullptr);
+
+                    if (!loweredFirst) return nullptr;
+
+                    AstDecl* instance = LookupInstance(&compiler->instances, interfaceName, loweredFirst->type);
+                    const AstExpr* method = instance
+                        ? FindInstanceMethod(instance, root->identName)
+                        : nullptr;
+
+                    if (method) {
+                        LanceType* resultType = strcmp(interfaceName, "Eq") == 0 || strcmp(interfaceName, "Ord") == 0
+                            ? GetTypeBool()
+                            : loweredFirst->type;
+                        LanceType* operatorType = CreateBinaryOperatorType(compiler, loweredFirst->type, resultType);
+                        TypedExpr* callee = LowerExpr(compiler, method, scope, operatorType);
+                        TypedExpr* loweredSecond = LowerExpr(compiler, secondArg, scope, loweredFirst->type);
+
+                        if (!callee || !loweredSecond || !TypesAreEqual(loweredFirst->type, loweredSecond->type)) {
+                            if (loweredSecond && !TypesAreEqual(loweredFirst->type, loweredSecond->type)) {
+                                fprintf(stderr, "[%u:%u] Type Error: Argument type mismatch (expected '%s', got '%s')\n",
+                                        expr->line,
+                                        expr->column,
+                                        TypeToString(loweredFirst->type),
+                                        TypeToString(loweredSecond->type));
+                                compiler->hadError = true;
+                            }
+                            FreeTypedExpr(loweredFirst);
+                            FreeTypedExpr(callee);
+                            FreeTypedExpr(loweredSecond);
+                            return nullptr;
+                        }
+
+                        TypedExpr* firstApplication = CreateTypedCallExpr(
+                            callee,
+                            loweredFirst,
+                            operatorType->function.returnType,
+                            expr->line,
+                            expr->column
+                        );
+                        return CreateTypedCallExpr(
+                            firstApplication,
+                            loweredSecond,
+                            operatorType->function.returnType->function.returnType,
+                            expr->line,
+                            expr->column
+                        );
+                    }
+
+                    FreeTypedExpr(loweredFirst);
+                }
 
                 if (sym && sym->typeDecl && sym->typeDecl->typeAnnotation &&
                     sym->typeDecl->typeAnnotation->kind == AST_TYPE_CONSTRAINED) {
