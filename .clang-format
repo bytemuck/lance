@@ -1,0 +1,41 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+AlignConsecutiveAssignments: true
+AlignConsecutiveDeclarations: true
+AlignOperands: true
+AlignTrailingComments:
+  Kind: Always
+BraceWrapping:
+  AfterCaseLabel: false
+  AfterClass: false
+  AfterControlStatement: false
+  AfterEnum: false
+  AfterFunction: false
+  AfterNamespace: false
+  AfterStruct: false
+  AfterUnion: false
+  AfterExternBlock: false
+  BeforeCatch: false
+  BeforeElse: false
+  BeforeLambdaBody: false
+  BeforeWhile: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
+BreakBeforeBraces: Attach
+BreakConstructorInitializers: BeforeComma
+BreakConstructorInitializersBeforeComma: false
+ColumnLimit: 120
+ContinuationIndentWidth: 8
+IndentCaseLabels: true
+IndentWidth: 4
+InsertNewlineAtEOF: true
+MaxEmptyLinesToKeep: 2
+NamespaceIndentation: All
+SpaceAfterCStyleCast: true
+SpaceBeforeRangeBasedForLoopColon: true
+SpacesInAngles: false
+TabWidth: 4
+UseTab: Always
+...

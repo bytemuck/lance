@@ -1,0 +1,127 @@
+-- ============================================================================
+-- Lance Feature Showcase
+-- ============================================================================
+
+-- 1. First-Class Types & Generic Type Functions
+Vec :: type -> type
+Vec T = {
+    x :: T
+  , y :: T
+}
+
+-- 2. Compile-Time Type Specialization / Aliases
+Vec2 :: type
+Vec2 = Vec f32
+
+-- 3. Constructors via Standard Functions & Struct Value Literals (.{ ... })
+newVec :: f32 -> f32 -> Vec2
+newVec x y = .{
+    x = x
+  , y = y
+}
+
+-- 4. Prefix Operations & Postfix Field Access (.x, .y)
+addVec :: Vec2 -> Vec2 -> Vec2
+addVec a b = .{
+    x = + a.x b.x
+  , y = + a.y b.y
+}
+
+-- 5. Currying / Partial Application with Multi-Argument Functions
+scale :: f32 -> f32 -> f32
+scale factor value = * factor value
+
+double :: f32 -> f32
+double = scale 2.0
+
+addTen :: f32 -> f32
+addTen = + 10.0
+
+-- 6. Higher-Order Functions (Passing Functions as Arguments)
+applyFn :: (f32 -> f32) -> f32 -> f32
+applyFn f val = f val
+
+-- 7. Struct Values, Evaluations, and Currying in Action
+p1 :: Vec2
+p1 = newVec 1.0 2.0
+
+p2 :: Vec2
+p2 = newVec 3.0 4.0
+
+pSum :: Vec2
+pSum = addVec p1 p2
+
+-- 8. Classes Definitions
+Numeric :: type -> type
+Numeric T = {
+    add :: T -> T -> T
+  , sub :: T -> T -> T
+  , mul :: T -> T -> T
+  , div :: T -> T -> T
+}
+
+-- 9. Classes Instances
+Numeric f32 :: type
+Numeric f32 = .{
+    add = +
+  , sub = -
+  , mul = *
+  , div = /
+}
+
+-- 10. Class-Generics
+addCustom :: (Numeric T) => T -> T -> T
+addCustom a b = T.add a b
+
+vec2Add :: Vec2 -> Vec2 -> Vec2
+vec2Add a b = .{
+    x = + a.x b.x
+  , y = + a.y b.y
+}
+
+vec2Sub :: Vec2 -> Vec2 -> Vec2
+vec2Sub a b = .{
+    x = - a.x b.x
+  , y = - a.y b.y
+}
+
+vec2Mul :: Vec2 -> Vec2 -> Vec2
+vec2Mul a b = .{
+    x = * a.x b.x
+  , y = * a.y b.y
+}
+
+vec2Div :: Vec2 -> Vec2 -> Vec2
+vec2Div a b = .{
+    x = / a.x b.x
+  , y = / a.y b.y
+}
+
+-- 9. Classes Instances
+Numeric Vec2 :: type
+Numeric Vec2 = .{
+    add = vec2Add
+  , sub = vec2Sub
+  , mul = vec2Mul
+  , div = vec2Div
+}
+
+v1 :: Vec2
+v1 = .{ x = 1.0, y = 2.0 }
+
+v2 :: Vec2
+v2 = .{ x = 3.0, y = 4.0 }
+
+v3 :: Vec2
+v3 = addCustom v1 v2
+
+v4 :: f32
+v4 = addCustom 2.5 7.2
+
+-- 11. Main Entry Point
+-- Computes (pSum.x * 2.0) + 10.0 -> (4.0 * 2.0) + 10.0 = 18.0
+main :: Vec2
+main = .{
+    x = v4
+  , y = v3.y
+}
