@@ -5,6 +5,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 void CompilerError(Compiler* compiler, const uint32_t line, const uint32_t column, const char* format, ...) {
     char message[512];
@@ -31,6 +32,7 @@ void InitializeCompiler(Compiler* compiler) {
         SymbolTableInsert(compiler->builtins, kPrimitiveOperators[i].name, SYMBOL_BUILTIN, nullptr, nullptr);
     }
     SymbolTableInsert(compiler->builtins, LANCE_PRINT_NAME, SYMBOL_BUILTIN, nullptr, nullptr);
+    SymbolTableInsert(compiler->builtins, LANCE_IF_NAME, SYMBOL_BUILTIN, nullptr, nullptr);
 }
 
 void FreeCompiler(Compiler* compiler) {
@@ -240,6 +242,76 @@ static void CollectInstances(Compiler* compiler, const ClassifiedDeclList* decls
     }
 }
 
+typedef VEC(AstConstraint) ConstraintList;
+
+static bool DeclaresTypeParam(const ConstraintList* params, const char* name) {
+    for (size_t i = 0; i < params->count; i++) {
+        if (strcmp(params->items[i].typeParam, name) == 0) return true;
+    }
+    return false;
+}
+
+// Adds every type name in `type` that is not declared in the current module
+// as an implicit, unconstrained type parameter.
+static void CollectImplicitTypeParams(const Compiler* compiler, const AstType* type, ConstraintList* params) {
+    if (!type) return;
+
+    switch (type->kind) {
+        case AST_TYPE_NAMED:
+            if (!LookupTypeName(type->named.name, compiler->globals) && !DeclaresTypeParam(params, type->named.name)) {
+                VEC_PUSH(*params, ((AstConstraint){ .interfaceName = nullptr, .typeParam = type->named.name }));
+            }
+            return;
+
+        case AST_TYPE_FUNCTION:
+            CollectImplicitTypeParams(compiler, type->function.paramType, params);
+            CollectImplicitTypeParams(compiler, type->function.returnType, params);
+            return;
+
+        case AST_TYPE_LAZY:
+            CollectImplicitTypeParams(compiler, type->lazy.inner, params);
+            return;
+
+        case AST_TYPE_STRUCT:
+            for (size_t i = 0; i < type->structType.fieldCount; i++) {
+                CollectImplicitTypeParams(compiler, type->structType.fields[i].type, params);
+            }
+            return;
+
+        case AST_TYPE_CONSTRAINED:
+            return;
+    }
+}
+
+// A function signature is generic if it has constraints, `(Numeric T) => ...`,
+// or mentions undeclared type names, `bool -> lazy T -> lazy T -> T`. Returns
+// the signature with every type parameter listed as a constraint, or null.
+static const AstType* GenericSignature(Compiler* compiler, const AstType* annotation) {
+    const bool constrained = annotation->kind == AST_TYPE_CONSTRAINED;
+    const AstType* target = constrained ? annotation->constrained.targetType : annotation;
+    if (!target || (!constrained && target->kind != AST_TYPE_FUNCTION)) return nullptr;
+
+    ConstraintList params = {0};
+    for (size_t i = 0; constrained && i < annotation->constrained.constraintCount; i++) {
+        VEC_PUSH(params, annotation->constrained.constraints[i]);
+    }
+    const size_t explicitCount = params.count;
+    CollectImplicitTypeParams(compiler, target, &params);
+
+    const AstType* generic = annotation;
+    if (params.count > explicitCount) {
+        AstConstraint* constraints = ARENA_ARRAY(&compiler->specializations, AstConstraint, params.count);
+        memcpy(constraints, params.items, params.count * sizeof(AstConstraint));
+        generic = CreateConstrainedTypeAst(&compiler->specializations, constraints, params.count, (AstType*)target,
+                                           annotation->line, annotation->column);
+    } else if (!constrained) {
+        generic = nullptr;
+    }
+
+    VEC_FREE(params);
+    return generic;
+}
+
 // Pass 4: resolve value signatures, which may mention the types defined above.
 static void CollectValueSignatures(Compiler* compiler, const ClassifiedDeclList* decls) {
     for (size_t i = 0; i < decls->count; i++) {
@@ -257,14 +329,11 @@ static void CollectValueSignatures(Compiler* compiler, const ClassifiedDeclList*
             continue;
         }
 
-        LanceType* type = ResolveAstType(compiler, decl->typeAnnotation, compiler->globals);
+        const AstType* generic = GenericSignature(compiler, decl->typeAnnotation);
+        LanceType* type = ResolveAstType(compiler, generic ? generic : decl->typeAnnotation, compiler->globals);
         SymbolTableInsert(compiler->globals, decl->name, SYMBOL_VALUE, type, (AstDecl*)decl);
+        SymbolTableLookupCurrentScope(compiler->globals, decl->name)->generic = generic;
     }
-}
-
-static bool IsGenericTemplate(const Symbol* symbol) {
-    return symbol->typeDecl && symbol->typeDecl->typeAnnotation &&
-           symbol->typeDecl->typeAnnotation->kind == AST_TYPE_CONSTRAINED;
 }
 
 // Pass 5a: attach value bodies, so generic templates are available before
@@ -298,7 +367,7 @@ static void LowerValues(Compiler* compiler, const ClassifiedDeclList* decls) {
         EnterModule(compiler, decls->items[i].module);
 
         const Symbol* symbol = SymbolTableLookupCurrentScope(compiler->globals, decl->name);
-        if (!symbol || symbol->valueDecl != decl || IsGenericTemplate(symbol) || !symbol->type) continue;
+        if (!symbol || symbol->valueDecl != decl || symbol->generic || !symbol->type) continue;
 
         LowerBinding(compiler, symbol->globalName, decl->params, decl->paramCount, symbol->type,
                      decl->body, decl->line, decl->column);

@@ -1,0 +1,3 @@
+-- expect-error: Primitive 'if#' needs a condition and both branches to know its type
+main :: i32
+main = if# true 1

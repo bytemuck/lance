@@ -5,6 +5,7 @@
 #ifndef LANCE_TYPE_H
 #define LANCE_TYPE_H
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
 
@@ -50,6 +51,9 @@ struct LanceType {
         struct {
             LanceType* paramType;
             LanceType* returnType;
+            // `lazy T -> R`: the argument is passed unevaluated and computed
+            // at most once, when the function first uses it. paramType is T.
+            bool lazyParam;
         } function;
 
         // TYPE_STRUCT
@@ -81,6 +85,7 @@ LanceType* GetPrimitiveTypeByName(const char* name);
 // Compound types live in the given arena and are released together with it.
 // Primitive types are static singletons and are never freed.
 LanceType* CreateFunctionType(Arena* arena, LanceType* paramType, LanceType* returnType);
+LanceType* CreateLazyFunctionType(Arena* arena, LanceType* paramType, LanceType* returnType);
 LanceType* CreateStructType(Arena* arena, const char* name, StructFieldType* fields, size_t fieldCount);
 
 bool IsNumericType(const LanceType* type);

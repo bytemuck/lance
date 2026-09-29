@@ -123,6 +123,12 @@ static AstType* ParsePrimitiveType(Parser* parser) {
     const uint32_t line = parser->current.line;
     const uint32_t column = parser->current.column;
 
+    // lazy T: binds tighter than `->`, so `lazy T -> T` is `(lazy T) -> T`
+    if (Match(parser, TOKEN_LAZY)) {
+        AstType* inner = ParsePrimitiveType(parser);
+        return inner ? CreateLazyTypeAst(parser->arena, inner, line, column) : nullptr;
+    }
+
     // Primitive keyword or identifier name
     if (parser->current.type > TOKEN_KEYWORD_IMPL_MINIMUM && parser->current.type < TOKEN_KEYWORD_IMPL_MAXIMUM) {
         const char* identifier = CopyTokenString(parser, parser->current);
@@ -250,38 +256,70 @@ static bool IsTypeKeywordToken(const TokenType type) {
     return type > TOKEN_KEYWORD_IMPL_MINIMUM && type < TOKEN_KEYWORD_IMPL_MAXIMUM;
 }
 
+typedef struct {
+    const char* name;
+    AstExpr* value;
+    uint32_t line;
+    uint32_t column;
+} LetBinding;
+
+// After `let`:
+//   let a = x in body
+//   let a = x, b = y in body
+//   let a = x
+//       b = y
+//   in body
+// Bindings are separated by commas or start on a new line. Several bindings
+// are sugar for nested lets, so each one can use the bindings before it.
+static AstExpr* ParseLet(Parser* parser, const uint32_t line, const uint32_t column) {
+    size_t capacity = 4;
+    size_t count = 0;
+    LetBinding* bindings = ARENA_ARRAY(parser->arena, LetBinding, capacity);
+
+    do {
+        if (!Check(parser, TOKEN_IDENT)) {
+            Consume(parser, TOKEN_IDENT, "Expected name after 'let'");
+            return nullptr;
+        }
+        const Token nameToken = parser->current;
+        Advance(parser);
+        if (!Consume(parser, TOKEN_EQUAL, "Expected '=' after let name")) return nullptr;
+
+        AstExpr* value = ParseExpr(parser);
+        if (!value) return nullptr;
+
+        if (count >= capacity) {
+            capacity *= 2;
+            bindings = GrowAstArray(parser->arena, bindings, count, capacity, sizeof(LetBinding));
+        }
+        bindings[count++] = (LetBinding){
+            .name = CopyTokenString(parser, nameToken),
+            .value = value,
+            .line = nameToken.line,
+            .column = nameToken.column,
+        };
+    } while (Match(parser, TOKEN_COMMA) || (Check(parser, TOKEN_IDENT) && CheckPeek(parser, TOKEN_EQUAL)));
+
+    if (!Consume(parser, TOKEN_IN, "Expected 'in' after let value")) return nullptr;
+    AstExpr* body = ParseExpr(parser);
+    if (!body) return nullptr;
+
+    // `let a = x, b = y in body` is `let a = x in let b = y in body`.
+    for (size_t i = count; i > 1; i--) {
+        const LetBinding* binding = &bindings[i - 1];
+        body = CreateLetExpr(parser->arena, binding->name, binding->value, body, binding->line, binding->column);
+    }
+    return CreateLetExpr(parser->arena, bindings[0].name, bindings[0].value, body, line, column);
+}
+
 static AstExpr* ParsePrimaryExpr(Parser* parser) {
     const uint32_t line = parser->current.line;
     const uint32_t column = parser->current.column;
 
     AstExpr* expr;
 
-    // if c then a else b: each part extends up to the next keyword, so the
-    // else branch extends as far right as possible.
-    if (Match(parser, TOKEN_IF)) {
-        AstExpr* condition = ParseExpr(parser);
-        if (!Consume(parser, TOKEN_THEN, "Expected 'then' after if condition")) return nullptr;
-        AstExpr* thenBranch = ParseExpr(parser);
-        if (!Consume(parser, TOKEN_ELSE, "Expected 'else' after then branch")) return nullptr;
-        AstExpr* elseBranch = ParseExpr(parser);
-        if (!condition || !thenBranch || !elseBranch) return nullptr;
-        return CreateIfExpr(parser->arena, condition, thenBranch, elseBranch, line, column);
-    }
-
-    // let name = value in body
     if (Match(parser, TOKEN_LET)) {
-        if (!Check(parser, TOKEN_IDENT)) {
-            Consume(parser, TOKEN_IDENT, "Expected name after 'let'");
-            return nullptr;
-        }
-        const char* name = CopyTokenString(parser, parser->current);
-        Advance(parser);
-        if (!Consume(parser, TOKEN_EQUAL, "Expected '=' after let name")) return nullptr;
-        AstExpr* value = ParseExpr(parser);
-        if (!Consume(parser, TOKEN_IN, "Expected 'in' after let value")) return nullptr;
-        AstExpr* body = ParseExpr(parser);
-        if (!value || !body) return nullptr;
-        return CreateLetExpr(parser->arena, name, value, body, line, column);
+        return ParseLet(parser, line, column);
     }
 
     // Integer literal
@@ -382,7 +420,6 @@ static bool CanStartExpr(const TokenType type) {
         type == TOKEN_BACKTICK ||
         type == TOKEN_LPAREN ||
         type == TOKEN_LBRACE ||
-        type == TOKEN_IF ||
         type == TOKEN_LET ||
         IsTypeKeywordToken(type);
 }
@@ -392,8 +429,7 @@ static bool CanTakeArguments(const AstExpr* expr) {
         return false;
     }
 
-    if (expr->kind == AST_EXPR_TYPE || expr->kind == AST_EXPR_STRUCT_VALUE ||
-        expr->kind == AST_EXPR_IF || expr->kind == AST_EXPR_LET) {
+    if (expr->kind == AST_EXPR_TYPE || expr->kind == AST_EXPR_STRUCT_VALUE || expr->kind == AST_EXPR_LET) {
         return false;
     }
 
@@ -409,7 +445,9 @@ static bool CanConsumeArgument(const Parser* parser, const AstExpr* callee) {
         return false;
     }
 
-    if (parser->current.type == TOKEN_IDENT && parser->peek.type == TOKEN_COLON_COLON) {
+    // `name ::` starts a declaration, `name =` the next let binding.
+    if (parser->current.type == TOKEN_IDENT &&
+        (parser->peek.type == TOKEN_COLON_COLON || parser->peek.type == TOKEN_EQUAL)) {
         return false;
     }
 

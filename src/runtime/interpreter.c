@@ -90,23 +90,77 @@ static const NativeFn kPrimitiveImplementations[PRIMITIVE_OP_COUNT] = {
 #undef PRIMITIVE_IMPLEMENTATION
 };
 
-static Value* NativePrint(Interpreter* interp, size_t argc, Value** args) {
-    (void)interp;
-    if (argc > 0 && args[0]) {
-        if (args[0]->kind == VAL_STRING) {
-            printf("%s\n", args[0]->stringVal);
-        } else {
-            PrintValue(args[0]);
-            printf("\n");
-        }
-    }
-    return MakeUnitValue();
-}
-
 // ---- Evaluation --------------------------------------------------------------
 
 // `frame` holds the SLOT_LOCAL values of the call being evaluated.
 static Value* EvalTypedExpr(Interpreter* interp, const TypedExpr* expr, Slots* frame);
+
+// The value of a `lazy` argument, evaluating it on first use. Other values
+// are returned as they are. Returns nullptr on a runtime error.
+static const Value* Force(Interpreter* interp, const Value* value) {
+    if (!value || value->kind != VAL_THUNK) return value;
+
+    Thunk* thunk = value->thunk;
+    if (thunk->value) return thunk->value;
+    if (thunk->evaluating) {
+        RuntimeError(interp, "Lazy argument depends on itself");
+        return nullptr;
+    }
+
+    thunk->evaluating = true;
+    Slots frame = { .values = thunk->frame, .count = thunk->frameCount };
+    Value* result = EvalTypedExpr(interp, thunk->expr, &frame);
+    thunk->evaluating = false;
+    if (!result) return nullptr;
+
+    SetThunkResult(thunk, result);
+    return result;
+}
+
+// The argument of a call to a `lazy` parameter. Values that are already
+// known (literals, evaluated locals) are passed as they are, a local that is
+// itself a lazy argument is passed on unevaluated, and anything else is
+// delayed together with a snapshot of the frame.
+static Value* DelayArgument(Interpreter* interp, const TypedExpr* arg, Slots* frame) {
+    switch (arg->kind) {
+        case TYPED_EXPR_INT_LIT:
+        case TYPED_EXPR_FLOAT_LIT:
+        case TYPED_EXPR_BOOL_LIT:
+        case TYPED_EXPR_STRING_LIT:
+            return EvalTypedExpr(interp, arg, frame);
+
+        case TYPED_EXPR_VAR:
+            if (arg->var.slot.kind == SLOT_LOCAL && frame->values[arg->var.slot.index]) {
+                return CopyValue(frame->values[arg->var.slot.index]);
+            }
+            break;
+
+        default:
+            break;
+    }
+    return MakeThunkValue(arg, frame->values, frame->count);
+}
+
+static Value* NativePrint(Interpreter* interp, size_t argc, Value** args) {
+    const Value* value = argc > 0 ? Force(interp, args[0]) : nullptr;
+    if (!value) return interp->hadError ? nullptr : MakeUnitValue();
+
+    if (value->kind == VAL_STRING) {
+        printf("%s\n", value->stringVal);
+    } else {
+        PrintValue(value);
+        printf("\n");
+    }
+    return MakeUnitValue();
+}
+
+// if# c a b: `a` and `b` arrive unevaluated; only the chosen one is forced.
+static Value* NativeIf(Interpreter* interp, size_t argc, Value** args) {
+    (void)argc;
+    const Value* condition = Force(interp, args[0]);
+    if (!condition) return nullptr;
+    return CopyValue(Force(interp, condition->boolVal ? args[1] : args[2]));
+}
 
 // Evaluates `decl` with `args` bound to its parameters, in a fresh frame.
 static Value* EvalDecl(Interpreter* interp, const TypedDecl* decl, Value** args) {
@@ -151,7 +205,7 @@ static Value* LookupVariable(Interpreter* interp, const TypedExpr* expr, const S
     const Value* value = nullptr;
 
     switch (slot.kind) {
-        case SLOT_LOCAL:  value = frame->values[slot.index]; break;
+        case SLOT_LOCAL:  value = Force(interp, frame->values[slot.index]); break;
         case SLOT_GLOBAL: value = ForceGlobal(interp, slot.index); break;
         case SLOT_NATIVE: value = interp->natives.values[slot.index]; break;
         case SLOT_TYPE:   return MakeTypeValue(GetPrimitiveTypeByName(expr->var.name));
@@ -249,7 +303,9 @@ static Value* EvalStructInit(Interpreter* interp, const TypedExpr* expr, Slots* 
 
 static Value* EvalCall(Interpreter* interp, const TypedExpr* expr, Slots* frame) {
     Value* callee = EvalTypedExpr(interp, expr->call.callee, frame);
-    Value* arg = callee ? EvalTypedExpr(interp, expr->call.argument, frame) : nullptr;
+    Value* arg = !callee                 ? nullptr
+               : expr->call.lazyArgument ? DelayArgument(interp, expr->call.argument, frame)
+                                         : EvalTypedExpr(interp, expr->call.argument, frame);
 
     Value* result = callee && arg ? ApplyFunction(interp, callee, arg) : nullptr;
 
@@ -265,14 +321,6 @@ static Value* EvalLet(Interpreter* interp, const TypedExpr* expr, Slots* frame) 
     return EvalTypedExpr(interp, expr->let.body, frame);
 }
 
-static Value* EvalIf(Interpreter* interp, const TypedExpr* expr, Slots* frame) {
-    Value* condition = EvalTypedExpr(interp, expr->conditional.condition, frame);
-    if (!condition) return nullptr;
-    bool isTrue = condition->boolVal;
-    FreeValue(condition);
-    return EvalTypedExpr(interp, isTrue ? expr->conditional.thenBranch : expr->conditional.elseBranch, frame);
-}
-
 static Value* EvalTypedExpr(Interpreter* interp, const TypedExpr* expr, Slots* frame) {
     if (!expr || interp->hadError) return nullptr;
 
@@ -285,7 +333,6 @@ static Value* EvalTypedExpr(Interpreter* interp, const TypedExpr* expr, Slots* f
         case TYPED_EXPR_FIELD_ACCESS: return EvalFieldAccess(interp, expr, frame);
         case TYPED_EXPR_STRUCT_INIT:  return EvalStructInit(interp, expr, frame);
         case TYPED_EXPR_CALL:         return EvalCall(interp, expr, frame);
-        case TYPED_EXPR_IF:           return EvalIf(interp, expr, frame);
         case TYPED_EXPR_LET:          return EvalLet(interp, expr, frame);
     }
 
@@ -312,6 +359,7 @@ static void CreateNatives(Interpreter* interp) {
                 MakeNativeFnValue(kPrimitiveOperators[i].name, kPrimitiveImplementations[i], 2, nullptr, 0));
     }
     SetSlot(&interp->natives, NATIVE_PRINT, MakeNativeFnValue(LANCE_PRINT_NAME, NativePrint, 1, nullptr, 0));
+    SetSlot(&interp->natives, NATIVE_IF, MakeNativeFnValue(LANCE_IF_NAME, NativeIf, 3, nullptr, 0));
 }
 
 // Functions become closures right away; constants are evaluated lazily.

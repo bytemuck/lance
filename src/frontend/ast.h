@@ -21,6 +21,7 @@ typedef enum {
     AST_TYPE_FUNCTION,    // e.g. 'T1 -> T2'
     AST_TYPE_STRUCT,      // e.g. '{ x :: T, y :: T }'
     AST_TYPE_CONSTRAINED, // e.g. (Interface T) => ReturnType
+    AST_TYPE_LAZY,        // e.g. 'lazy T', only valid as a parameter type
 } AstTypeKind;
 
 typedef struct AstType AstType;
@@ -53,6 +54,11 @@ struct AstType {
             size_t fieldCount;
         } structType;
 
+        // AST_TYPE_LAZY
+        struct {
+            AstType* inner;
+        } lazy;
+
         // AST_TYPE_CONSTRAINED
         struct {
         	AstConstraint* constraints;
@@ -69,7 +75,6 @@ typedef enum {
     AST_EXPR_BOOL_LIT,
     AST_EXPR_IDENT,
     AST_EXPR_CALL,
-    AST_EXPR_IF,
     AST_EXPR_LET,
     AST_EXPR_FIELD_ACCESS,
     AST_EXPR_STRUCT_VALUE,
@@ -102,13 +107,6 @@ struct AstExpr {
             AstExpr* callee;
             AstExpr* argument;
         } call;
-
-        // if condition then thenBranch else elseBranch
-        struct {
-            AstExpr* condition;
-            AstExpr* thenBranch;
-            AstExpr* elseBranch;
-        } conditional;
 
         // let name = value in body
         struct {
@@ -187,6 +185,7 @@ AstType* CreateNamedTypeAst(Arena* arena, const char* name, uint32_t line, uint3
 AstType* CreateFunctionTypeAst(Arena* arena, AstType* paramType, AstType* returnType, uint32_t line, uint32_t column);
 AstType* CreateStructTypeAst(Arena* arena, AstFieldDecl* fields, size_t fieldCount, uint32_t line, uint32_t column);
 AstType* CreateConstrainedTypeAst(Arena* arena, AstConstraint* constraints, size_t count, AstType* targetType, uint32_t line, uint32_t column);
+AstType* CreateLazyTypeAst(Arena* arena, AstType* inner, uint32_t line, uint32_t column);
 AstType* CloneAstType(Arena* arena, const AstType* type);
 
 AstExpr* CreateIntLitExpr(Arena* arena, int64_t value, uint32_t line, uint32_t column);
@@ -196,7 +195,6 @@ AstExpr* CreateBoolLitExpr(Arena* arena, bool value, uint32_t line, uint32_t col
 AstExpr* CreateIdentExpr(Arena* arena, const char* name, uint32_t line, uint32_t column);
 AstExpr* CreateTypeExpr(Arena* arena, AstType* type, uint32_t line, uint32_t column);
 AstExpr* CreateCallExpr(Arena* arena, AstExpr* callee, AstExpr* args, uint32_t line, uint32_t column);
-AstExpr* CreateIfExpr(Arena* arena, AstExpr* condition, AstExpr* thenBranch, AstExpr* elseBranch, uint32_t line, uint32_t column);
 AstExpr* CreateLetExpr(Arena* arena, const char* name, AstExpr* value, AstExpr* body, uint32_t line, uint32_t column);
 AstExpr* CreateFieldAccessExpr(Arena* arena, AstExpr* base, const char* fieldName, uint32_t line, uint32_t column);
 AstExpr* CreateStructValueExpr(Arena* arena, AstFieldValue* fields, size_t fieldCount, uint32_t line, uint32_t column);

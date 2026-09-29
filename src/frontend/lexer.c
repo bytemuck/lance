@@ -158,15 +158,16 @@ static const struct {
     { "true",   TOKEN_BOOL_LIT },
     { "false",  TOKEN_BOOL_LIT },
     { "import", TOKEN_IMPORT },
-    { "if",     TOKEN_IF },
-    { "then",   TOKEN_THEN },
-    { "else",   TOKEN_ELSE },
     { "let",    TOKEN_LET },
     { "in",     TOKEN_IN },
+    { "lazy",   TOKEN_LAZY },
 };
 
 static Token LexIdentifier(Lexer* lexer) {
     for (char c = Peek(lexer); IsAlphaNumeric(c); Advance(lexer), c = Peek(lexer)) {}
+
+    // Named primitives end in `#`, like the operator ones: `if#`.
+    Match(lexer, '#');
 
     const uint32_t length = lexer->end - lexer->begin;
     for (size_t i = 0; i < sizeof(kKeywords) / sizeof(kKeywords[0]); i++) {

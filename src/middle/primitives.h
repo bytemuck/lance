@@ -64,10 +64,15 @@ static inline const PrimitiveInfo* LookupPrimitiveOperator(const char* name) {
 // Native functions that aren't operators.
 #define LANCE_PRINT_NAME "print"
 
+// if# :: bool -> lazy T -> lazy T -> T, for any T. Only the chosen branch
+// is evaluated; the standard library builds `if`, `and` and `or` on it.
+#define LANCE_IF_NAME "if#"
+
 // Every native function has a fixed SLOT_NATIVE index: the primitive
 // operators first (a PrimitiveOp is its own index), then the others.
 typedef enum {
     NATIVE_PRINT = PRIMITIVE_OP_COUNT,
+    NATIVE_IF,
     NATIVE_COUNT
 } NativeId;
 

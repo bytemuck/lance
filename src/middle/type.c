@@ -3,7 +3,9 @@
 //
 
 #include "type.h"
+#include "string_pool.h"
 
+#include <stdio.h>
 #include <string.h>
 
 static LanceType gTypeI8 = { .kind = TYPE_I8, .id = 0 };
@@ -70,7 +72,14 @@ LanceType* CreateFunctionType(Arena* arena, LanceType* paramType, LanceType* ret
     type->id = gNextTypeId++;
     type->function.paramType = paramType;
     type->function.returnType = returnType;
+    type->function.lazyParam = false;
 
+    return type;
+}
+
+LanceType* CreateLazyFunctionType(Arena* arena, LanceType* paramType, LanceType* returnType) {
+    LanceType* type = CreateFunctionType(arena, paramType, returnType);
+    type->function.lazyParam = true;
     return type;
 }
 
@@ -127,7 +136,8 @@ bool TypesAreEqual(const LanceType *a, const LanceType *b) {
 
     switch (a->kind) {
         case TYPE_FUNCTION:
-            return TypesAreEqual(a->function.paramType, b->function.paramType) &&
+            return a->function.lazyParam == b->function.lazyParam &&
+                   TypesAreEqual(a->function.paramType, b->function.paramType) &&
                    TypesAreEqual(a->function.returnType, b->function.returnType);
 
         case TYPE_STRUCT:
@@ -138,6 +148,18 @@ bool TypesAreEqual(const LanceType *a, const LanceType *b) {
     }
 }
 
+// `lazy A -> (B -> C) -> D`; the result is interned.
+static const char* FunctionTypeToString(const LanceType* type) {
+    const LanceType* param = type->function.paramType;
+    const bool parenthesize = param && param->kind == TYPE_FUNCTION;
+    char buffer[512];
+    const int length = snprintf(buffer, sizeof(buffer), "%s%s%s%s -> %s",
+                                type->function.lazyParam ? "lazy " : "",
+                                parenthesize ? "(" : "", TypeToString(param), parenthesize ? ")" : "",
+                                TypeToString(type->function.returnType));
+    if (length < 0) return "<function>";
+    return InternString(buffer, (uint32_t)(length < (int)sizeof(buffer) ? length : (int)sizeof(buffer) - 1));
+}
 
 const char* TypeToString(const LanceType* type) {
     if (!type) return "<null>";
@@ -157,7 +179,7 @@ const char* TypeToString(const LanceType* type) {
         case TYPE_STRING: return "string";
         case TYPE_UNIT: return "()";
         case TYPE_TYPE: return "type";
-        case TYPE_FUNCTION: return "<function>";
+        case TYPE_FUNCTION: return FunctionTypeToString(type);
         case TYPE_STRUCT:
             if (type->structType.name) return type->structType.name;
             return "{ ... }";

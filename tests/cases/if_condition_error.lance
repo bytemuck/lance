@@ -1,3 +1,0 @@
--- expect-error: If condition must be 'bool'
-main :: i32
-main = if 1 then 2 else 3

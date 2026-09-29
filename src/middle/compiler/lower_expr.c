@@ -18,17 +18,40 @@ static LanceType* PrimitiveResultType(const PrimitiveInfo* primitive, LanceType*
     return primitive->class == PRIMITIVE_CLASS_COMPARISON ? GetTypeBool() : operand;
 }
 
-// True if `type` is `T -> T -> R` with T accepted by the primitive and R its result.
+// True if `type` is `T -> T -> R` with T accepted by the primitive and R its
+// result. Primitive operators evaluate both operands, so neither is lazy.
 static bool IsPrimitiveOperatorType(const PrimitiveInfo* primitive, const LanceType* type) {
-    if (!type || type->kind != TYPE_FUNCTION) return false;
+    if (!type || type->kind != TYPE_FUNCTION || type->function.lazyParam) return false;
 
     const LanceType* right = type->function.returnType;
-    if (!right || right->kind != TYPE_FUNCTION) return false;
+    if (!right || right->kind != TYPE_FUNCTION || right->function.lazyParam) return false;
 
     LanceType* operand = type->function.paramType;
     return TypesAreEqual(operand, right->function.paramType) &&
            PrimitiveAcceptsOperand(primitive, operand) &&
            TypesAreEqual(right->function.returnType, PrimitiveResultType(primitive, operand));
+}
+
+// bool -> lazy T -> lazy T -> T
+static LanceType* NewIfPrimitiveType(Compiler* compiler, LanceType* branchType) {
+    LanceType* elseType = CreateLazyFunctionType(&compiler->types, branchType, branchType);
+    LanceType* thenType = CreateLazyFunctionType(&compiler->types, branchType, elseType);
+    return NewFunctionType(compiler, GetTypeBool(), thenType);
+}
+
+static bool IsIfPrimitiveType(const LanceType* type) {
+    if (!type || type->kind != TYPE_FUNCTION || type->function.lazyParam ||
+        !TypesAreEqual(type->function.paramType, GetTypeBool())) {
+        return false;
+    }
+    const LanceType* thenType = type->function.returnType;
+    if (!thenType || thenType->kind != TYPE_FUNCTION || !thenType->function.lazyParam) return false;
+
+    const LanceType* branch = thenType->function.paramType;
+    const LanceType* elseType = thenType->function.returnType;
+    return elseType && elseType->kind == TYPE_FUNCTION && elseType->function.lazyParam &&
+           TypesAreEqual(elseType->function.paramType, branch) &&
+           TypesAreEqual(elseType->function.returnType, branch);
 }
 
 // ---- Call spines -------------------------------------------------------------
@@ -140,6 +163,16 @@ static TypedExpr* LowerIdent(Compiler* compiler, const AstExpr* expr, const Symb
     if (strcmp(name, LANCE_PRINT_NAME) == 0) {
         LanceType* printType = expectedType ? expectedType : NewFunctionType(compiler, GetTypeString(), GetTypeUnit());
         return CreateTypedVarExpr(InternCString(LANCE_PRINT_NAME), SLOT_REF(SLOT_NATIVE, NATIVE_PRINT), printType,
+                                  expr->line, expr->column);
+    }
+
+    if (strcmp(name, LANCE_IF_NAME) == 0) {
+        if (!IsIfPrimitiveType(expectedType)) {
+            CompilerError(compiler, expr->line, expr->column,
+                          "Primitive '%s' needs a condition and both branches to know its type", name);
+            return nullptr;
+        }
+        return CreateTypedVarExpr(InternCString(LANCE_IF_NAME), SLOT_REF(SLOT_NATIVE, NATIVE_IF), expectedType,
                                   expr->line, expr->column);
     }
 
@@ -303,6 +336,41 @@ static TypedExpr* LowerPrimitiveBinary(Compiler* compiler, const AstExpr* expr, 
     return BuildBinaryApplication(compiler, expr, callee, lhs, rhs, operatorType);
 }
 
+// `if# c a b`: both branches have the same type, and only one is evaluated.
+static TypedExpr* LowerPrimitiveIf(Compiler* compiler, const AstExpr* expr, const CallSpine* spine,
+                                   const SymbolTable* scope, LanceType* expectedType) {
+    TypedExpr* condition = LowerExpr(compiler, spine->args[0], scope, GetTypeBool());
+    TypedExpr* thenBranch = LowerExpr(compiler, spine->args[1], scope, expectedType);
+    TypedExpr* elseBranch = LowerExpr(compiler, spine->args[2], scope, thenBranch ? thenBranch->type : expectedType);
+    if (!condition || !thenBranch || !elseBranch) goto invalid;
+
+    if (!TypesAreEqual(condition->type, GetTypeBool())) {
+        CompilerError(compiler, spine->args[0]->line, spine->args[0]->column,
+                      "Condition of '%s' must be 'bool', got '%s'", LANCE_IF_NAME, TypeToString(condition->type));
+        goto invalid;
+    }
+    if (!TypesAreEqual(thenBranch->type, elseBranch->type)) {
+        CompilerError(compiler, expr->line, expr->column,
+                      "Branches of '%s' must have the same type (got '%s' and '%s')",
+                      LANCE_IF_NAME, TypeToString(thenBranch->type), TypeToString(elseBranch->type));
+        goto invalid;
+    }
+
+    LanceType* ifType = NewIfPrimitiveType(compiler, thenBranch->type);
+    TypedExpr* result = LowerExpr(compiler, spine->root, scope, ifType);
+    TypedExpr* args[] = { condition, thenBranch, elseBranch };
+    for (size_t i = 0; i < 3; i++) {
+        result = CreateTypedCallExpr(result, args[i], result->type->function.returnType, expr->line, expr->column);
+    }
+    return result;
+
+invalid:
+    FreeTypedExpr(condition);
+    FreeTypedExpr(thenBranch);
+    FreeTypedExpr(elseBranch);
+    return nullptr;
+}
+
 // The final result type of a curried function type.
 static LanceType* FinalReturnType(LanceType* type) {
     while (type && type->kind == TYPE_FUNCTION) type = type->function.returnType;
@@ -357,20 +425,49 @@ static TypedExpr* LowerInterfaceBinary(Compiler* compiler, const AstExpr* expr, 
     return BuildBinaryApplication(compiler, expr, callee, lhs, rhs, operatorType);
 }
 
-static bool IsConstrainedGeneric(const Symbol* symbol) {
-    return symbol && symbol->typeDecl && symbol->typeDecl->typeAnnotation &&
-           symbol->typeDecl->typeAnnotation->kind == AST_TYPE_CONSTRAINED;
+static bool IsGeneric(const Symbol* symbol) {
+    return symbol && symbol->kind == SYMBOL_VALUE && symbol->generic;
+}
+
+static const AstType* StripLazy(const AstType* type) {
+    return type && type->kind == AST_TYPE_LAZY ? type->lazy.inner : type;
+}
+
+// The type parameter a generic returns after `argCount` arguments, such as
+// `T` in `bool -> lazy T -> lazy T -> T`, or null.
+static const char* ResultTypeParam(const AstType* generic, const size_t argCount) {
+    const AstType* type = generic->constrained.targetType;
+    for (size_t i = 0; i < argCount && type && type->kind == AST_TYPE_FUNCTION; i++) {
+        type = type->function.returnType;
+    }
+    if (!type || type->kind != AST_TYPE_NAMED) return nullptr;
+
+    for (size_t i = 0; i < generic->constrained.constraintCount; i++) {
+        if (strcmp(generic->constrained.constraints[i].typeParam, type->named.name) == 0) return type->named.name;
+    }
+    return nullptr;
 }
 
 // `square x` where `square :: (Numeric T) => T -> T`: lower the arguments,
 // specialize for their types, and call the specialization.
 static TypedExpr* LowerGenericCall(Compiler* compiler, const AstExpr* expr, const CallSpine* spine,
-                                   const Symbol* symbol, const SymbolTable* scope) {
+                                   const Symbol* symbol, const SymbolTable* scope, LanceType* expectedType) {
+    // Arguments typed by the result's type parameter get the expected type
+    // as a hint, so `if c 1.0 2.0` can be an f64.
+    const char* resultParam = expectedType ? ResultTypeParam(symbol->generic, spine->argCount) : nullptr;
+    const AstType* paramTypes = symbol->generic->constrained.targetType;
+
     TypedExpr** args = ALLOCATE(TypedExpr*, spine->argCount);
     bool argError = false;
     for (size_t i = 0; i < spine->argCount; i++) {
-        args[i] = LowerExpr(compiler, spine->args[i], scope, nullptr);
+        const AstType* paramType = paramTypes && paramTypes->kind == AST_TYPE_FUNCTION
+            ? StripLazy(paramTypes->function.paramType)
+            : nullptr;
+        const bool hinted = resultParam && paramType && paramType->kind == AST_TYPE_NAMED &&
+                            strcmp(paramType->named.name, resultParam) == 0;
+        args[i] = LowerExpr(compiler, spine->args[i], scope, hinted ? expectedType : nullptr);
         if (!args[i]) argError = true;
+        paramTypes = paramTypes && paramTypes->kind == AST_TYPE_FUNCTION ? paramTypes->function.returnType : nullptr;
     }
 
     const Symbol* specialization = argError
@@ -446,7 +543,10 @@ static TypedExpr* LowerCall(Compiler* compiler, const AstExpr* expr, const Symbo
         const char* name = spine.root->identName;
         const PrimitiveInfo* primitive = LookupPrimitiveOperator(name);
 
-        if (primitive && spine.argCount == 2) {
+        if (strcmp(name, LANCE_IF_NAME) == 0 && spine.argCount == 3) {
+            result = LowerPrimitiveIf(compiler, expr, &spine, scope, expectedType);
+            handled = true;
+        } else if (primitive && spine.argCount == 2) {
             result = LowerPrimitiveBinary(compiler, expr, &spine, primitive, scope, expectedType);
             handled = true;
         } else if (spine.argCount == 2 && HasInstanceMethod(compiler, name)) {
@@ -459,8 +559,8 @@ static TypedExpr* LowerCall(Compiler* compiler, const AstExpr* expr, const Symbo
         const Symbol* symbol = module ? SymbolTableLookupCurrentScope(module, spine.root->fieldAccess.fieldName)
                             : spine.root->kind == AST_EXPR_IDENT ? SymbolTableLookup(scope, spine.root->identName)
                             : nullptr;
-        if (IsConstrainedGeneric(symbol)) {
-            result = LowerGenericCall(compiler, expr, &spine, symbol, scope);
+        if (IsGeneric(symbol)) {
+            result = LowerGenericCall(compiler, expr, &spine, symbol, scope, expectedType);
             handled = true;
         }
     }
@@ -470,31 +570,6 @@ static TypedExpr* LowerCall(Compiler* compiler, const AstExpr* expr, const Symbo
 }
 
 // ---- Dispatcher --------------------------------------------------------------
-
-static TypedExpr* LowerIf(Compiler* compiler, const AstExpr* expr, const SymbolTable* scope, LanceType* expectedType) {
-    TypedExpr* condition = LowerExpr(compiler, expr->conditional.condition, scope, GetTypeBool());
-    TypedExpr* thenBranch = LowerExpr(compiler, expr->conditional.thenBranch, scope, expectedType);
-    TypedExpr* elseBranch = LowerExpr(compiler, expr->conditional.elseBranch, scope,
-                                      thenBranch ? thenBranch->type : expectedType);
-    if (!condition || !thenBranch || !elseBranch) goto invalid;
-    if (!TypesAreEqual(condition->type, GetTypeBool())) {
-        CompilerError(compiler, expr->conditional.condition->line, expr->conditional.condition->column,
-                      "If condition must be 'bool', got '%s'", TypeToString(condition->type));
-        goto invalid;
-    }
-    if (!TypesAreEqual(thenBranch->type, elseBranch->type)) {
-        CompilerError(compiler, expr->line, expr->column, "If branches must have the same type (got '%s' and '%s')",
-                      TypeToString(thenBranch->type), TypeToString(elseBranch->type));
-        goto invalid;
-    }
-    return CreateTypedIfExpr(condition, thenBranch, elseBranch, thenBranch->type, expr->line, expr->column);
-
-invalid:
-    FreeTypedExpr(condition);
-    FreeTypedExpr(thenBranch);
-    FreeTypedExpr(elseBranch);
-    return nullptr;
-}
 
 // `let name = value in body`: the value gets the next free slot of the call frame.
 static TypedExpr* LowerLet(Compiler* compiler, const AstExpr* expr, const SymbolTable* scope, LanceType* expectedType) {
@@ -526,7 +601,6 @@ TypedExpr* LowerExpr(Compiler* compiler, const AstExpr* expr, const SymbolTable*
         case AST_EXPR_FIELD_ACCESS: return LowerFieldAccess(compiler, expr, scope);
         case AST_EXPR_STRUCT_VALUE: return LowerStructValue(compiler, expr, scope, expectedType);
         case AST_EXPR_CALL:         return LowerCall(compiler, expr, scope, expectedType);
-        case AST_EXPR_IF:           return LowerIf(compiler, expr, scope, expectedType);
         case AST_EXPR_LET:          return LowerLet(compiler, expr, scope, expectedType);
         case AST_EXPR_COMPTIME:     return LowerExpr(compiler, expr->comptime.inner, scope, expectedType);
 

@@ -1,0 +1,5 @@
+-- Several bindings in one `let`, separated by commas. Each binding can use
+-- the ones before it.
+-- expect: 42
+main :: i32
+main = let x = 20, y = +# x 2, z = +# x y in z

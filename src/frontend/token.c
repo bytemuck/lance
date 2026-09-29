@@ -29,11 +29,9 @@ const char* TokenTypeToString(const TokenType type) {
         case TOKEN_KEYWORD_F32:  return "TOKEN_KEYWORD_F32";
         case TOKEN_KEYWORD_F64:  return "TOKEN_KEYWORD_F64";
         case TOKEN_IMPORT: return "'import'";
-        case TOKEN_IF:     return "'if'";
-        case TOKEN_THEN:   return "'then'";
-        case TOKEN_ELSE:   return "'else'";
         case TOKEN_LET:    return "'let'";
         case TOKEN_IN:     return "'in'";
+        case TOKEN_LAZY:   return "'lazy'";
 
         // Syntax & Punctuation
         case TOKEN_COLON_COLON: return "TOKEN_COLON_COLON";

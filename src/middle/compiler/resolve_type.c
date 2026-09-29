@@ -31,11 +31,20 @@ LanceType* ResolveAstType(Compiler* compiler, const AstType* astType, const Symb
         }
 
         case AST_TYPE_FUNCTION: {
-            LanceType* paramType = ResolveAstType(compiler, astType->function.paramType, scope);
+            // `lazy T -> R` is a property of the parameter, not a type of its own.
+            const AstType* param = astType->function.paramType;
+            const bool lazy = param && param->kind == AST_TYPE_LAZY;
+            LanceType* paramType = ResolveAstType(compiler, lazy ? param->lazy.inner : param, scope);
             LanceType* returnType = ResolveAstType(compiler, astType->function.returnType, scope);
             if (!paramType || !returnType) return nullptr;
-            return NewFunctionType(compiler, paramType, returnType);
+            return lazy ? CreateLazyFunctionType(&compiler->types, paramType, returnType)
+                        : NewFunctionType(compiler, paramType, returnType);
         }
+
+        case AST_TYPE_LAZY:
+            CompilerError(compiler, astType->line, astType->column,
+                          "'lazy' is only allowed on a function parameter, as in 'lazy T -> R'");
+            return nullptr;
 
         case AST_TYPE_STRUCT: {
             const size_t count = astType->structType.fieldCount;

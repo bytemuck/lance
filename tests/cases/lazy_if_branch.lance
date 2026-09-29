@@ -1,0 +1,6 @@
+import "bool.lance"
+
+-- The branch that isn't taken is never evaluated, so it can't divide by zero.
+-- expect: 7
+main :: i32
+main = if true 7 (//# 1 0)

@@ -1,0 +1,3 @@
+-- expect-error: 'lazy' is only allowed on a function parameter
+main :: lazy i32
+main = 1

@@ -1,0 +1,21 @@
+-- ============================================================================
+-- Control flow and boolean logic
+-- ============================================================================
+--
+-- A `lazy` parameter receives its argument unevaluated; the argument is
+-- computed the first time the function uses it, and at most once. That lets
+-- control flow be ordinary functions built on the `if#` primitive, which only
+-- evaluates the branch it picks.
+
+if :: bool -> lazy T -> lazy T -> T
+if condition whenTrue whenFalse = if# condition whenTrue whenFalse
+
+-- Short-circuiting: the second operand is only evaluated when needed.
+and :: bool -> lazy bool -> bool
+and a b = if# a b false
+
+or :: bool -> lazy bool -> bool
+or a b = if# a true b
+
+not :: bool -> bool
+not a = if# a false true

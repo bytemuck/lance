@@ -26,6 +26,10 @@ typedef struct Symbol {
     size_t slot;            // SYMBOL_LOCAL only: index in the call frame
     AstDecl* typeDecl;      // The `name :: T` annotation, if any
     AstDecl* valueDecl;     // The `name ... = body` binding, if any
+    // SYMBOL_VALUE only: for a generic function, its signature as
+    // `(Constraints) => T`, including implicit type parameters (constraints
+    // without an interface). Null for ordinary values.
+    const AstType* generic;
 } Symbol;
 
 typedef struct SymbolTable SymbolTable;

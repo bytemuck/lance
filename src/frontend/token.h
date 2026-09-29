@@ -37,11 +37,9 @@ typedef enum {
 
     // Declaration & Expression Keywords
     TOKEN_IMPORT,       // 'import'
-    TOKEN_IF,           // 'if'
-    TOKEN_THEN,         // 'then'
-    TOKEN_ELSE,         // 'else'
     TOKEN_LET,          // 'let'
     TOKEN_IN,           // 'in'
+    TOKEN_LAZY,         // 'lazy', a parameter type modifier
 
     // Operators & Punctuation
     TOKEN_COLON_COLON,  // ::

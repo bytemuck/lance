@@ -3,6 +3,10 @@
 -- ============================================================================
 
 import "num.lance"
+import "bool.lance"
 
-main :: f32
-main = * 5.0 5.0
+sumTo :: i32 -> i32
+sumTo n = if (<= n 0) 0 (let rest = sumTo (- n 1) in + n rest)
+
+main :: i32
+main = sumTo 10

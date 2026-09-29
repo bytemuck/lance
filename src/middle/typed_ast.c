@@ -54,15 +54,8 @@ TypedExpr* CreateTypedCallExpr(TypedExpr* callee, TypedExpr* argument, LanceType
     if (!expr) return nullptr;
     expr->call.callee = callee;
     expr->call.argument = argument;
-    return expr;
-}
-
-TypedExpr* CreateTypedIfExpr(TypedExpr* condition, TypedExpr* thenBranch, TypedExpr* elseBranch, LanceType* type, uint32_t line, uint32_t column) {
-    TypedExpr* expr = AllocateTypedExprNode(TYPED_EXPR_IF, type, line, column);
-    if (!expr) return nullptr;
-    expr->conditional.condition = condition;
-    expr->conditional.thenBranch = thenBranch;
-    expr->conditional.elseBranch = elseBranch;
+    const LanceType* calleeType = callee ? callee->type : nullptr;
+    expr->call.lazyArgument = calleeType && calleeType->kind == TYPE_FUNCTION && calleeType->function.lazyParam;
     return expr;
 }
 
@@ -107,12 +100,6 @@ void FreeTypedExpr(TypedExpr* expr) {
         case TYPED_EXPR_CALL:
             FreeTypedExpr(expr->call.callee);
             FreeTypedExpr(expr->call.argument);
-            break;
-
-        case TYPED_EXPR_IF:
-            FreeTypedExpr(expr->conditional.condition);
-            FreeTypedExpr(expr->conditional.thenBranch);
-            FreeTypedExpr(expr->conditional.elseBranch);
             break;
 
         case TYPED_EXPR_LET:

@@ -1,0 +1,6 @@
+import "bool.lance"
+
+-- The expected type of the result types the branches, so these are f64.
+-- expect: 1.500000
+main :: f64
+main = if true 1.5 2.5

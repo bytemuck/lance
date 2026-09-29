@@ -1,0 +1,12 @@
+-- The lazy argument `*# n 10` outlives the call of `scaled` that created it:
+-- it is kept in the partial application `choose n (*# n 10)` and only
+-- evaluated later, after `scaled` has returned.
+choose :: i32 -> lazy i32 -> i32 -> i32
+choose n x y = +# y (if# (># n 0) x 0)
+
+scaled :: i32 -> i32 -> i32
+scaled n = choose n (*# n 10)
+
+-- expect: 31
+main :: i32
+main = scaled 3 1

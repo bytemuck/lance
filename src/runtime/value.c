@@ -150,6 +150,44 @@ Value* MakeClosureValue(const TypedDecl* decl, Value** appliedArgs, const size_t
     return v;
 }
 
+Value* MakeThunkValue(const TypedExpr* expr, Value* const* frame, const size_t frameCount) {
+    Value* const v = malloc(sizeof(Value));
+    Thunk* const thunk = malloc(sizeof(Thunk));
+
+    if (!v || !thunk) {
+        free(v);
+        free(thunk);
+        return nullptr;
+    }
+
+    *thunk = (Thunk){ .refCount = 1, .expr = expr, .frameCount = frameCount };
+    if (frameCount > 0) {
+        thunk->frame = malloc(frameCount * sizeof(Value*));
+        for (size_t i = 0; i < frameCount; i++) {
+            thunk->frame[i] = CopyValue(frame[i]);
+        }
+    }
+
+    v->kind = VAL_THUNK;
+    v->thunk = thunk;
+    return v;
+}
+
+static void ReleaseThunkFrame(Thunk* thunk) {
+    for (size_t i = 0; i < thunk->frameCount; i++) {
+        FreeValue(thunk->frame[i]);
+    }
+    free(thunk->frame);
+    thunk->frame = nullptr;
+    thunk->frameCount = 0;
+}
+
+void SetThunkResult(Thunk* thunk, Value* result) {
+    thunk->value = result;
+    thunk->expr = nullptr;
+    ReleaseThunkFrame(thunk);
+}
+
 Value* CopyValue(const Value* value) {
     if (!value) {
         return nullptr;
@@ -180,6 +218,16 @@ Value* CopyValue(const Value* value) {
         }
 
         case VAL_CLOSURE: return MakeClosureValue(value->closure.decl, value->closure.appliedArgs, value->closure.appliedCount);
+
+        case VAL_THUNK: {
+            Value* const v = malloc(sizeof(Value));
+            if (!v) return nullptr;
+            v->kind = VAL_THUNK;
+            v->thunk = value->thunk;
+            v->thunk->refCount++;
+            return v;
+        }
+
         default:
             return nullptr;
     }
@@ -216,6 +264,13 @@ void PrintValue(const Value* value) {
             break;
         case VAL_CLOSURE:
             printf("<function %s>", value->closure.decl ? value->closure.decl->name : "anonymous");
+            break;
+        case VAL_THUNK:
+            if (value->thunk->value) {
+                PrintValue(value->thunk->value);
+            } else {
+                printf("<lazy>");
+            }
             break;
         case VAL_STRUCT:
             printf(".{ ");
@@ -265,6 +320,13 @@ void FreeValue(Value* value) {
             }
 
             free(value->closure.appliedArgs);
+        }
+    } else if (value->kind == VAL_THUNK) {
+        Thunk* thunk = value->thunk;
+        if (--thunk->refCount == 0) {
+            ReleaseThunkFrame(thunk);
+            FreeValue(thunk->value);
+            free(thunk);
         }
     }
 

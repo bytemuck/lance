@@ -1,0 +1,8 @@
+import "bool.lance"
+
+factorial :: i32 -> i32
+factorial n = if (<=# n 1) 1 (*# n (factorial (-# n 1)))
+
+-- expect: 120
+main :: i32
+main = factorial 5

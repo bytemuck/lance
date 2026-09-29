@@ -1,0 +1,11 @@
+-- A function with a lazy parameter is not interchangeable with one that
+-- evaluates its argument: callers must know which one they are calling.
+apply :: (i32 -> i32) -> i32 -> i32
+apply f x = f x
+
+lazyIdentity :: lazy i32 -> i32
+lazyIdentity x = x
+
+-- expect-error: Argument type mismatch (expected 'i32 -> i32', got 'lazy i32 -> i32')
+main :: i32
+main = apply lazyIdentity 1

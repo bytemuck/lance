@@ -1,5 +1,7 @@
+import "bool.lance"
+
 sumTo :: i32 -> i32
-sumTo n = if <=# n 0 then 0 else let rest = sumTo (-# n 1) in +# n rest
+sumTo n = if (<=# n 0) 0 (let rest = sumTo (-# n 1) in +# n rest)
 
 -- expect: 55
 main :: i32

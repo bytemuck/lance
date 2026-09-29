@@ -5,6 +5,7 @@
 #include <string.h>
 
 // Binds a constrained type parameter (e.g. `T`) to the instance chosen for it.
+// Unconstrained type parameters have no instance.
 typedef struct {
     const char* typeParam;
     const AstDecl* instanceDecl;
@@ -20,7 +21,7 @@ static AstExpr* CloneAndSpecializeExpr(Arena* arena, const AstExpr* expr, const 
                 const char* targetName = expr->fieldAccess.target->identName;
 
                 for (size_t i = 0; i < bindingCount; i++) {
-                    if (strcmp(targetName, bindings[i].typeParam) == 0) {
+                    if (bindings[i].instanceDecl && strcmp(targetName, bindings[i].typeParam) == 0) {
                         const AstExpr* method = FindInstanceMethod(bindings[i].instanceDecl, expr->fieldAccess.fieldName);
                         if (method) {
                             return CloneAndSpecializeExpr(arena, method, bindings, bindingCount);
@@ -39,14 +40,6 @@ static AstExpr* CloneAndSpecializeExpr(Arena* arena, const AstExpr* expr, const 
             return CreateCallExpr(arena,
                 CloneAndSpecializeExpr(arena, expr->call.callee, bindings, bindingCount),
                 CloneAndSpecializeExpr(arena, expr->call.argument, bindings, bindingCount),
-                expr->line, expr->column
-            );
-
-        case AST_EXPR_IF:
-            return CreateIfExpr(arena,
-                CloneAndSpecializeExpr(arena, expr->conditional.condition, bindings, bindingCount),
-                CloneAndSpecializeExpr(arena, expr->conditional.thenBranch, bindings, bindingCount),
-                CloneAndSpecializeExpr(arena, expr->conditional.elseBranch, bindings, bindingCount),
                 expr->line, expr->column
             );
 
@@ -82,17 +75,35 @@ static AstExpr* CloneAndSpecializeExpr(Arena* arena, const AstExpr* expr, const 
 }
 
 // Matches a signature against a concrete argument type, recording which
-// concrete type each type parameter stands for.
-static void DeduceTypeParam(const AstType* astParamType, LanceType* concreteType, Table* typeParamMap) {
-    if (!astParamType || !concreteType) return;
+// concrete type each type parameter stands for. Returns false, and names the
+// parameter in *conflict, if it was already deduced as a different type.
+static bool DeduceTypeParam(const AstType* astParamType, LanceType* concreteType, Table* typeParamMap,
+                            const char** conflict) {
+    if (!astParamType || !concreteType) return true;
 
-    if (astParamType->kind == AST_TYPE_NAMED) {
-        if (!GetPrimitiveTypeByName(astParamType->named.name)) {
-            TableSet(typeParamMap, astParamType->named.name, concreteType);
+    switch (astParamType->kind) {
+        case AST_TYPE_NAMED: {
+            const char* name = astParamType->named.name;
+            if (GetPrimitiveTypeByName(name)) return true;
+            const LanceType* previous = TableGet(typeParamMap, name);
+            if (previous && !TypesAreEqual(previous, concreteType)) {
+                *conflict = name;
+                return false;
+            }
+            TableSet(typeParamMap, name, concreteType);
+            return true;
         }
-    } else if (astParamType->kind == AST_TYPE_FUNCTION && concreteType->kind == TYPE_FUNCTION) {
-        DeduceTypeParam(astParamType->function.paramType, concreteType->function.paramType, typeParamMap);
-        DeduceTypeParam(astParamType->function.returnType, concreteType->function.returnType, typeParamMap);
+
+        case AST_TYPE_LAZY:
+            return DeduceTypeParam(astParamType->lazy.inner, concreteType, typeParamMap, conflict);
+
+        case AST_TYPE_FUNCTION:
+            if (concreteType->kind != TYPE_FUNCTION) return true;
+            return DeduceTypeParam(astParamType->function.paramType, concreteType->function.paramType, typeParamMap, conflict) &&
+                   DeduceTypeParam(astParamType->function.returnType, concreteType->function.returnType, typeParamMap, conflict);
+
+        default:
+            return true;
     }
 }
 
@@ -127,7 +138,7 @@ const Symbol* SpecializeGenericFunction(Compiler* compiler, const Symbol* symbol
         return nullptr;
     }
 
-    const AstType* constrained = symbol->typeDecl->typeAnnotation;
+    const AstType* constrained = symbol->generic;
     const AstType* targetType = constrained->constrained.targetType;
     const size_t constraintCount = constrained->constrained.constraintCount;
     const AstConstraint* constraints = constrained->constrained.constraints;
@@ -136,8 +147,15 @@ const Symbol* SpecializeGenericFunction(Compiler* compiler, const Symbol* symbol
     TableInit(&typeParamMap);
 
     const AstType* signature = targetType;
+    const char* conflict = nullptr;
     for (size_t i = 0; i < argCount && signature && signature->kind == AST_TYPE_FUNCTION; i++) {
-        DeduceTypeParam(signature->function.paramType, loweredArgs[i]->type, &typeParamMap);
+        if (!DeduceTypeParam(signature->function.paramType, loweredArgs[i]->type, &typeParamMap, &conflict)) {
+            CompilerError(compiler, line, column,
+                          "Type parameter '%s' of '%s' cannot be both '%s' and '%s'", conflict, symbol->name,
+                          TypeToString(TableGet(&typeParamMap, conflict)), TypeToString(loweredArgs[i]->type));
+            TableFree(&typeParamMap);
+            return nullptr;
+        }
         signature = signature->function.returnType;
     }
 
@@ -156,6 +174,11 @@ const Symbol* SpecializeGenericFunction(Compiler* compiler, const Symbol* symbol
             CompilerError(compiler, line, column, "Could not deduce type parameter '%s' for generic function '%s'",
                           typeParam, symbol->name);
             goto cleanup;
+        }
+
+        if (!constraints[i].interfaceName) {
+            bindings[i] = (InstanceBinding){ .typeParam = typeParam, .instanceDecl = nullptr };
+            continue;
         }
 
         EnterModule(compiler, templateModule);

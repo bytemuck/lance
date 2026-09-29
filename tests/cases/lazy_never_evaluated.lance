@@ -1,0 +1,7 @@
+-- An unused lazy argument is never evaluated.
+ignore :: lazy i32 -> i32
+ignore x = 0
+
+-- expect: 0
+main :: i32
+main = ignore (//# 1 0)

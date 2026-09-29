@@ -31,6 +31,12 @@ AstType* CreateConstrainedTypeAst(Arena* arena, AstConstraint* constraints, cons
     return node;
 }
 
+AstType* CreateLazyTypeAst(Arena* arena, AstType* inner, const uint32_t line, const uint32_t column) {
+    AstType* node = AllocateTypeNode(arena, AST_TYPE_LAZY, line, column);
+    node->lazy.inner = inner;
+    return node;
+}
+
 AstType* CloneAstType(Arena* arena, const AstType* type) {
     if (!type) return nullptr;
 
@@ -45,6 +51,9 @@ AstType* CloneAstType(Arena* arena, const AstType* type) {
                 type->line,
                 type->column
             );
+
+        case AST_TYPE_LAZY:
+            return CreateLazyTypeAst(arena, CloneAstType(arena, type->lazy.inner), type->line, type->column);
 
         case AST_TYPE_STRUCT: {
             const size_t count = type->structType.fieldCount;
@@ -143,14 +152,6 @@ AstExpr* CreateCallExpr(Arena* arena, AstExpr* callee, AstExpr* args, const uint
     AstExpr* const node = AllocateExprNode(arena, AST_EXPR_CALL, line, column);
     node->call.callee = callee;
     node->call.argument = args;
-    return node;
-}
-
-AstExpr* CreateIfExpr(Arena* arena, AstExpr* condition, AstExpr* thenBranch, AstExpr* elseBranch, const uint32_t line, const uint32_t column) {
-    AstExpr* const node = AllocateExprNode(arena, AST_EXPR_IF, line, column);
-    node->conditional.condition = condition;
-    node->conditional.thenBranch = thenBranch;
-    node->conditional.elseBranch = elseBranch;
     return node;
 }
 
