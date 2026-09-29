@@ -6,6 +6,7 @@
 #include "parser.h"
 #include "string_pool.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -58,70 +59,112 @@ static const char* ResolveImport(const Program* program, const char* importerPat
     return interned;
 }
 
-static bool IsLoaded(const Program* program, const char* path) {
+static AstModule* FindLoaded(const Program* program, const char* path) {
     for (size_t i = 0; i < program->files.count; i++) {
-        if (program->files.items[i].path == path) return true;
+        if (program->files.items[i].path == path) return program->modules.items[i];
+    }
+    return nullptr;
+}
+
+// "dir/util.lance" -> "util"
+static const char* ModuleBaseName(const char* modulePath) {
+    const char* start = strrchr(modulePath, '/');
+    start = start ? start + 1 : modulePath;
+    const char* end = strrchr(start, '.');
+    if (!end || end == start) end = start + strlen(start);
+    return InternString(start, (uint32_t)(end - start));
+}
+
+static bool IsModuleNameTaken(const Program* program, const char* name) {
+    for (size_t i = 0; i < program->modules.count; i++) {
+        if (program->modules.items[i]->name == name) return true;
     }
     return false;
 }
 
-static void AppendDeclarations(AstModule* destination, AstModule* source) {
-    if (source->count > 0) {
-        destination->declarations = GROW_ARRAY(AstDecl, destination->declarations,
-                                               destination->count, destination->count + source->count);
-        memcpy(destination->declarations + destination->count, source->declarations,
-               source->count * sizeof(AstDecl));
-        destination->count += source->count;
+// The program-wide name of an imported module, used to qualify its globals.
+// Usually the file's base name; files with equal base names get a suffix.
+static const char* UniqueModuleName(const Program* program, const char* path) {
+    const char* base = ModuleBaseName(path);
+    const char* name = base;
+    for (unsigned suffix = 2; IsModuleNameTaken(program, name); suffix++) {
+        char buffer[256];
+        snprintf(buffer, sizeof(buffer), "%s~%u", base, suffix);
+        name = InternCString(buffer);
     }
-    free(source->declarations);
-    free(source);
+    return name;
+}
+
+static AstModule* LoadFile(Program* program, const char* path, const char* displayName);
+
+// Resolves, loads and links the `import` declarations of `module`.
+static void LoadImports(Program* program, AstModule* module, const char* path) {
+    VEC(AstImport) imports = {0};
+
+    for (size_t i = 0; i < module->count; i++) {
+        const AstDecl* decl = &module->declarations[i];
+        if (decl->kind != AST_DECL_IMPORT || !decl->modulePath) continue;
+        const SourceLoc loc = SOURCE_LOC(module->file, decl->line, decl->column);
+
+        const char* importPath = ResolveImport(program, path, decl->modulePath);
+        if (!importPath) {
+            ReportError("Error", loc, "Could not resolve imported module '%s'", decl->modulePath);
+            program->hadError = true;
+            continue;
+        }
+
+        AstModule* target = FindLoaded(program, importPath);
+        if (!target) target = LoadFile(program, importPath, importPath);
+        if (!target || target == module) continue;
+
+        const char* alias = ModuleBaseName(decl->modulePath);
+        bool duplicate = false;
+        for (size_t j = 0; j < imports.count; j++) {
+            if (imports.items[j].alias != alias) continue;
+            duplicate = true;
+            if (imports.items[j].module != target) {
+                ReportError("Error", loc, "Module alias '%s' already refers to another module", alias);
+                program->hadError = true;
+            }
+        }
+        if (!duplicate) VEC_PUSH(imports, ((AstImport){ .alias = alias, .module = target }));
+    }
+
+    module->importCount = imports.count;
+    module->imports = ARENA_ARRAY(&program->astArena, AstImport, imports.count);
+    if (imports.count) memcpy(module->imports, imports.items, imports.count * sizeof(AstImport));
+    VEC_FREE(imports);
 }
 
 // Parses `path` (canonical, interned) and, recursively, what it imports.
-static void LoadFile(Program* program, const char* path, const char* displayName) {
+// The module is registered before its imports are loaded, so import cycles
+// link to it instead of loading it again.
+static AstModule* LoadFile(Program* program, const char* path, const char* displayName) {
     const char* source = ReadFile(path);
     if (!source) {
         program->hadError = true;
-        return;
+        return nullptr;
     }
-
-    VEC_PUSH(program->files, ((SourceFile){ .path = path, .source = source }));
     DiagRegisterSource(displayName, source);
 
     Lexer lexer;
     InitializeLexer(&lexer, source);
     Parser parser;
-    InitializeParser(&parser, &lexer, displayName);
-    AstModule* parsed = ParseModule(&parser);
+    InitializeParser(&parser, &lexer, displayName, &program->astArena);
+    AstModule* module = ParseModule(&parser);
     if (parser.hadError) program->hadError = true;
 
-    const size_t ownStart = program->module->count;
-    AppendDeclarations(program->module, parsed);
-    const size_t ownEnd = program->module->count;
+    module->name = program->modules.count == 0 ? nullptr : UniqueModuleName(program, path);
+    VEC_PUSH(program->modules, module);
+    VEC_PUSH(program->files, ((SourceFile){ .path = path, .source = source }));
 
-    // Loading an import appends to (and may move) the declaration array, so
-    // this file's declarations are visited by index.
-    for (size_t i = ownStart; i < ownEnd; i++) {
-        const AstDecl* decl = &program->module->declarations[i];
-        if (decl->kind != AST_DECL_IMPORT || !decl->modulePath) continue;
-
-        const char* importPath = ResolveImport(program, path, decl->modulePath);
-        if (!importPath) {
-            ReportError("Error", SOURCE_LOC(displayName, decl->line, decl->column),
-                        "Could not resolve imported module '%s'", decl->modulePath);
-            program->hadError = true;
-            continue;
-        }
-
-        if (!IsLoaded(program, importPath)) {
-            LoadFile(program, importPath, importPath);
-        }
-    }
+    LoadImports(program, module, path);
+    return module;
 }
 
 bool LoadProgram(Program* program, const char* entryPath, const char* argv0) {
     *program = (Program){0};
-    program->module = calloc(1, sizeof(AstModule));
+    InitArena(&program->astArena);
     InitSearchPaths(program, argv0);
 
     // The entry file keeps the name it was given for diagnostics; imports are
@@ -135,8 +178,8 @@ bool LoadProgram(Program* program, const char* entryPath, const char* argv0) {
 }
 
 void FreeProgram(Program* program) {
-    FreeModuleAst(program->module);
-    program->module = nullptr;
+    FreeArena(&program->astArena);
+    VEC_FREE(program->modules);
 
     for (size_t i = 0; i < program->files.count; i++) {
         free((void*)program->files.items[i].source);

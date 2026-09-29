@@ -1,0 +1,3 @@
+-- expect-error: Expected 'in' after let value
+main :: i32
+main = let x = 1 x

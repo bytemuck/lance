@@ -1,0 +1,12 @@
+import "module_helper_a.lance"
+
+Box :: type
+Box = { helper :: i32 }
+
+pick :: Box -> i32
+pick module_helper_a = module_helper_a.helper
+
+-- A parameter named like a module alias shadows the module.
+-- expect: 7
+main :: i32
+main = pick .{ helper = 7 }

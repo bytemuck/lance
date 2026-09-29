@@ -2,7 +2,6 @@
 #include "diag.h"
 #include "memory.h"
 #include "primitives.h"
-#include "string_pool.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -21,43 +20,27 @@ static void RuntimeError(Interpreter* interp, const char* format, ...) {
     interp->hadError = true;
 }
 
-// ---- Environments ------------------------------------------------------------
+// ---- Slots -------------------------------------------------------------------
 
-static Environment* CreateEnvironment(Environment* parent) {
-    Environment* env = ALLOCATE(Environment, 1);
-    env->parent = parent;
-    TableInit(&env->table);
-    return env;
+static Slots CreateSlots(const size_t count) {
+    Slots slots = { .values = nullptr, .count = count };
+    if (count > 0) {
+        slots.values = ALLOCATE(Value*, count);
+        memset(slots.values, 0, sizeof(Value*) * count);
+    }
+    return slots;
 }
 
-static void EnvironmentDefine(Environment* env, const char* name, Value* value) {
-    const char* interned = InternCString(name);
-    Value* existing = (Value*)TableGet(&env->table, interned);
-    if (existing) {
-        FreeValue(existing);
-    }
-    TableSet(&env->table, interned, value);
+// Stores `value` in the slot, releasing what it held before.
+static void SetSlot(Slots* slots, const size_t index, Value* value) {
+    FreeValue(slots->values[index]);
+    slots->values[index] = value;
 }
 
-static Value* EnvironmentLookup(const Environment* env, const char* name) {
-    const char* interned = InternCString(name);
-    for (const Environment* current = env; current; current = current->parent) {
-        Value* value = (Value*)TableGet(&current->table, interned);
-        if (value) return value;
-    }
-    return nullptr;
-}
-
-static void FreeEnvironment(Environment* env) {
-    if (!env) return;
-    for (size_t i = 0; i < env->table.capacity; i++) {
-        TableEntry* entry = &env->table.entries[i];
-        if (entry->key != nullptr && entry->value != nullptr && entry->value != (void*)1) {
-            FreeValue((Value*)entry->value);
-        }
-    }
-    TableFree(&env->table);
-    FREE(Environment, env);
+static void FreeSlots(Slots* slots) {
+    for (size_t i = 0; i < slots->count; i++) FreeValue(slots->values[i]);
+    if (slots->values) FREE_ARRAY(Value*, slots->values, slots->count);
+    *slots = (Slots){0};
 }
 
 // ---- Native functions --------------------------------------------------------
@@ -122,37 +105,62 @@ static Value* NativePrint(Interpreter* interp, size_t argc, Value** args) {
 
 // ---- Evaluation --------------------------------------------------------------
 
-static Value* EvalTypedExpr(Interpreter* interp, const TypedExpr* expr, Environment* env);
+// `frame` holds the SLOT_LOCAL values of the call being evaluated.
+static Value* EvalTypedExpr(Interpreter* interp, const TypedExpr* expr, Slots* frame);
 
-// Evaluates a global constant on first use, so constants may refer to ones
-// declared later in the file.
-static Value* ForceGlobal(Interpreter* interp, const char* name) {
-    const char* interned = InternCString(name);
-    const TypedDecl* decl = (const TypedDecl*)TableGet(&interp->pendingGlobals, interned);
-    if (!decl) return nullptr;
+// Evaluates `decl` with `args` bound to its parameters, in a fresh frame.
+static Value* EvalDecl(Interpreter* interp, const TypedDecl* decl, Value** args) {
+    Slots frame = CreateSlots(decl->frameSize);
+    for (size_t i = 0; i < decl->paramCount; i++) {
+        SetSlot(&frame, i, CopyValue(args[i]));
+    }
+    Value* result = EvalTypedExpr(interp, decl->body, &frame);
+    FreeSlots(&frame);
+    return result;
+}
 
-    if (TableGet(&interp->evaluatingGlobals, interned)) {
-        RuntimeError(interp, "Definition of '%s' depends on itself", name);
-        return nullptr;
+// Constants are evaluated on first use, so they may refer to globals declared
+// later in the program.
+static const Value* ForceGlobal(Interpreter* interp, const size_t index) {
+    Globals* globals = &interp->globals;
+    const TypedDecl* decl = &interp->module->declarations[index];
+
+    switch (globals->states[index]) {
+        case GLOBAL_EVALUATED:
+            return globals->values.values[index];
+
+        case GLOBAL_EVALUATING:
+            RuntimeError(interp, "Definition of '%s' depends on itself", decl->name);
+            return nullptr;
+
+        case GLOBAL_UNEVALUATED:
+            break;
     }
 
-    TableSet(&interp->evaluatingGlobals, interned, (void*)decl);
-    Value* value = EvalTypedExpr(interp, decl->body, interp->globals);
-    TableDelete(&interp->evaluatingGlobals, interned);
-    TableDelete(&interp->pendingGlobals, interned);
-
+    globals->states[index] = GLOBAL_EVALUATING;
+    Value* value = EvalDecl(interp, decl, nullptr);
     if (!value) return nullptr;
-    EnvironmentDefine(interp->globals, interned, value);
+
+    globals->states[index] = GLOBAL_EVALUATED;
+    SetSlot(&globals->values, index, value);
     return value;
 }
 
-static Value* LookupVariable(Interpreter* interp, Environment* env, const char* name) {
-    Value* value = EnvironmentLookup(env, name);
-    if (!value) value = ForceGlobal(interp, name);
-    if (!value && !interp->hadError) {
-        RuntimeError(interp, "Undefined variable '%s'", name);
+static Value* LookupVariable(Interpreter* interp, const TypedExpr* expr, const Slots* frame) {
+    const SlotRef slot = expr->var.slot;
+    const Value* value = nullptr;
+
+    switch (slot.kind) {
+        case SLOT_LOCAL:  value = frame->values[slot.index]; break;
+        case SLOT_GLOBAL: value = ForceGlobal(interp, slot.index); break;
+        case SLOT_NATIVE: value = interp->natives.values[slot.index]; break;
+        case SLOT_TYPE:   return MakeTypeValue(GetPrimitiveTypeByName(expr->var.name));
     }
-    return value;
+
+    if (!value && !interp->hadError) {
+        RuntimeError(interp, "Undefined variable '%s'", expr->var.name);
+    }
+    return CopyValue(value);
 }
 
 // Arguments applied so far, plus the new one. Callables are curried: they
@@ -192,16 +200,9 @@ static Value* ApplyFunction(Interpreter* interp, const Value* callee, const Valu
         const size_t count = closure->appliedCount + 1;
         Value** args = CollectArguments(closure->appliedArgs, closure->appliedCount, arg);
 
-        if (count < closure->totalParams) {
-            result = MakeClosureValue(closure->decl, closure->closureEnv, args, count);
-        } else {
-            Environment* callEnv = CreateEnvironment(closure->closureEnv);
-            for (size_t i = 0; i < closure->decl->paramCount; i++) {
-                EnvironmentDefine(callEnv, closure->decl->params[i], CopyValue(args[i]));
-            }
-            result = EvalTypedExpr(interp, closure->decl->body, callEnv);
-            FreeEnvironment(callEnv);
-        }
+        result = count < closure->totalParams
+            ? MakeClosureValue(closure->decl, args, count)
+            : EvalDecl(interp, closure->decl, args);
 
         FreeArguments(args, count);
         return result;
@@ -211,8 +212,8 @@ static Value* ApplyFunction(Interpreter* interp, const Value* callee, const Valu
     return nullptr;
 }
 
-static Value* EvalFieldAccess(Interpreter* interp, const TypedExpr* expr, Environment* env) {
-    Value* target = EvalTypedExpr(interp, expr->fieldAccess.target, env);
+static Value* EvalFieldAccess(Interpreter* interp, const TypedExpr* expr, Slots* frame) {
+    Value* target = EvalTypedExpr(interp, expr->fieldAccess.target, frame);
     if (!target) return nullptr;
 
     Value* result = nullptr;
@@ -226,13 +227,13 @@ static Value* EvalFieldAccess(Interpreter* interp, const TypedExpr* expr, Enviro
     return result;
 }
 
-static Value* EvalStructInit(Interpreter* interp, const TypedExpr* expr, Environment* env) {
+static Value* EvalStructInit(Interpreter* interp, const TypedExpr* expr, Slots* frame) {
     const size_t count = expr->structInit.fieldCount;
     StructFieldValue* fields = ALLOCATE(StructFieldValue, count);
 
     for (size_t i = 0; i < count; i++) {
         fields[i].name = expr->structInit.fields[i].name;
-        fields[i].value = EvalTypedExpr(interp, expr->structInit.fields[i].value, env);
+        fields[i].value = EvalTypedExpr(interp, expr->structInit.fields[i].value, frame);
     }
 
     const LanceType* structType = expr->structInit.structType;
@@ -246,9 +247,9 @@ static Value* EvalStructInit(Interpreter* interp, const TypedExpr* expr, Environ
     return result;
 }
 
-static Value* EvalCall(Interpreter* interp, const TypedExpr* expr, Environment* env) {
-    Value* callee = EvalTypedExpr(interp, expr->call.callee, env);
-    Value* arg = callee ? EvalTypedExpr(interp, expr->call.argument, env) : nullptr;
+static Value* EvalCall(Interpreter* interp, const TypedExpr* expr, Slots* frame) {
+    Value* callee = EvalTypedExpr(interp, expr->call.callee, frame);
+    Value* arg = callee ? EvalTypedExpr(interp, expr->call.argument, frame) : nullptr;
 
     Value* result = callee && arg ? ApplyFunction(interp, callee, arg) : nullptr;
 
@@ -257,7 +258,22 @@ static Value* EvalCall(Interpreter* interp, const TypedExpr* expr, Environment* 
     return result;
 }
 
-static Value* EvalTypedExpr(Interpreter* interp, const TypedExpr* expr, Environment* env) {
+static Value* EvalLet(Interpreter* interp, const TypedExpr* expr, Slots* frame) {
+    Value* value = EvalTypedExpr(interp, expr->let.value, frame);
+    if (!value) return nullptr;
+    SetSlot(frame, expr->let.slot, value);
+    return EvalTypedExpr(interp, expr->let.body, frame);
+}
+
+static Value* EvalIf(Interpreter* interp, const TypedExpr* expr, Slots* frame) {
+    Value* condition = EvalTypedExpr(interp, expr->conditional.condition, frame);
+    if (!condition) return nullptr;
+    bool isTrue = condition->boolVal;
+    FreeValue(condition);
+    return EvalTypedExpr(interp, isTrue ? expr->conditional.thenBranch : expr->conditional.elseBranch, frame);
+}
+
+static Value* EvalTypedExpr(Interpreter* interp, const TypedExpr* expr, Slots* frame) {
     if (!expr || interp->hadError) return nullptr;
 
     switch (expr->kind) {
@@ -265,10 +281,12 @@ static Value* EvalTypedExpr(Interpreter* interp, const TypedExpr* expr, Environm
         case TYPED_EXPR_FLOAT_LIT:    return MakeFloatValue(expr->floatVal);
         case TYPED_EXPR_BOOL_LIT:     return MakeBoolValue(expr->boolVal);
         case TYPED_EXPR_STRING_LIT:   return MakeStringValue(expr->stringVal);
-        case TYPED_EXPR_VAR:          return CopyValue(LookupVariable(interp, env, expr->varName));
-        case TYPED_EXPR_FIELD_ACCESS: return EvalFieldAccess(interp, expr, env);
-        case TYPED_EXPR_STRUCT_INIT:  return EvalStructInit(interp, expr, env);
-        case TYPED_EXPR_CALL:         return EvalCall(interp, expr, env);
+        case TYPED_EXPR_VAR:          return LookupVariable(interp, expr, frame);
+        case TYPED_EXPR_FIELD_ACCESS: return EvalFieldAccess(interp, expr, frame);
+        case TYPED_EXPR_STRUCT_INIT:  return EvalStructInit(interp, expr, frame);
+        case TYPED_EXPR_CALL:         return EvalCall(interp, expr, frame);
+        case TYPED_EXPR_IF:           return EvalIf(interp, expr, frame);
+        case TYPED_EXPR_LET:          return EvalLet(interp, expr, frame);
     }
 
     return nullptr;
@@ -277,52 +295,61 @@ static Value* EvalTypedExpr(Interpreter* interp, const TypedExpr* expr, Environm
 // ---- Entry points ------------------------------------------------------------
 
 void InitializeInterpreter(Interpreter* interp) {
-    interp->globals = CreateEnvironment(nullptr);
-    interp->module = nullptr;
-    interp->hadError = false;
-    TableInit(&interp->pendingGlobals);
-    TableInit(&interp->evaluatingGlobals);
-
-    for (size_t i = 0; i < PRIMITIVE_OP_COUNT; i++) {
-        const char* name = kPrimitiveOperators[i].name;
-        EnvironmentDefine(interp->globals, name,
-                          MakeNativeFnValue(name, kPrimitiveImplementations[i], 2, nullptr, 0));
-    }
-    EnvironmentDefine(interp->globals, LANCE_PRINT_NAME,
-                      MakeNativeFnValue(LANCE_PRINT_NAME, NativePrint, 1, nullptr, 0));
+    *interp = (Interpreter){0};
 }
 
 void FreeInterpreter(Interpreter* interp) {
-    FreeEnvironment(interp->globals);
-    interp->globals = nullptr;
-    TableFree(&interp->pendingGlobals);
-    TableFree(&interp->evaluatingGlobals);
+    FreeSlots(&interp->globals.values);
+    if (interp->globals.states) FREE_ARRAY(GlobalState, interp->globals.states, interp->module->count);
+    FreeSlots(&interp->natives);
+    *interp = (Interpreter){0};
+}
+
+static void CreateNatives(Interpreter* interp) {
+    interp->natives = CreateSlots(NATIVE_COUNT);
+    for (size_t i = 0; i < PRIMITIVE_OP_COUNT; i++) {
+        SetSlot(&interp->natives, i,
+                MakeNativeFnValue(kPrimitiveOperators[i].name, kPrimitiveImplementations[i], 2, nullptr, 0));
+    }
+    SetSlot(&interp->natives, NATIVE_PRINT, MakeNativeFnValue(LANCE_PRINT_NAME, NativePrint, 1, nullptr, 0));
+}
+
+// Functions become closures right away; constants are evaluated lazily.
+static void CreateGlobals(Interpreter* interp) {
+    const TypedModule* module = interp->module;
+    interp->globals.values = CreateSlots(module->count);
+    interp->globals.states = ALLOCATE(GlobalState, module->count);
+
+    for (size_t i = 0; i < module->count; i++) {
+        const TypedDecl* decl = &module->declarations[i];
+        if (decl->paramCount > 0) {
+            SetSlot(&interp->globals.values, i, MakeClosureValue(decl, nullptr, 0));
+            interp->globals.states[i] = GLOBAL_EVALUATED;
+        } else {
+            interp->globals.states[i] = GLOBAL_UNEVALUATED;
+        }
+    }
 }
 
 Value* InterpretTypedModule(Interpreter* interp, const TypedModule* module) {
     if (!module) return nullptr;
 
     interp->module = module;
+    CreateNatives(interp);
+    CreateGlobals(interp);
 
-    // Functions become closures right away; constants are evaluated lazily.
-    for (size_t i = 0; i < module->count; i++) {
-        const TypedDecl* decl = &module->declarations[i];
-        if (decl->paramCount > 0) {
-            EnvironmentDefine(interp->globals, decl->name, MakeClosureValue(decl, interp->globals, nullptr, 0));
-        } else {
-            TableSet(&interp->pendingGlobals, InternCString(decl->name), (void*)decl);
-        }
-    }
-
-    // Force the remaining constants in source order, so their effects (such as
-    // `print`) happen in a predictable order.
+    // Force the constants in source order, so their effects (such as `print`)
+    // happen in a predictable order.
     for (size_t i = 0; i < module->count && !interp->hadError; i++) {
-        const TypedDecl* decl = &module->declarations[i];
-        if (decl->paramCount == 0) ForceGlobal(interp, decl->name);
+        if (module->declarations[i].paramCount == 0) ForceGlobal(interp, i);
     }
 
     if (interp->hadError) return nullptr;
 
-    const Value* mainValue = EnvironmentLookup(interp->globals, "main");
-    return mainValue ? CopyValue(mainValue) : nullptr;
+    for (size_t i = 0; i < module->count; i++) {
+        if (strcmp(module->declarations[i].name, "main") == 0) {
+            return CopyValue(interp->globals.values.values[i]);
+        }
+    }
+    return nullptr;
 }

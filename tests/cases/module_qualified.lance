@@ -1,0 +1,8 @@
+import "module_util.lance"
+
+value :: i32
+value = 2
+
+-- expect: 42
+main :: i32
+main = +# module_util.value value

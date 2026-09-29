@@ -125,7 +125,7 @@ Value* MakeStructValue(const char* typeName, StructFieldValue* fields, const siz
     return v;
 }
 
-Value* MakeClosureValue(const TypedDecl* decl, Environment* env, Value** appliedArgs, const size_t appliedCount) {
+Value* MakeClosureValue(const TypedDecl* decl, Value** appliedArgs, const size_t appliedCount) {
     Value* const v = malloc(sizeof(Value));
 
     if (!v) {
@@ -134,7 +134,6 @@ Value* MakeClosureValue(const TypedDecl* decl, Environment* env, Value** applied
 
     v->kind = VAL_CLOSURE;
     v->closure.decl = decl;
-    v->closure.closureEnv = env;
     v->closure.appliedCount = appliedCount;
     v->closure.totalParams = decl ? decl->paramCount : 0;
 
@@ -180,7 +179,7 @@ Value* CopyValue(const Value* value) {
             return MakeStructValue(value->structVal.typeName, newFields, value->structVal.fieldCount);
         }
 
-        case VAL_CLOSURE: return MakeClosureValue(value->closure.decl, value->closure.closureEnv, value->closure.appliedArgs, value->closure.appliedCount);
+        case VAL_CLOSURE: return MakeClosureValue(value->closure.decl, value->closure.appliedArgs, value->closure.appliedCount);
         default:
             return nullptr;
     }

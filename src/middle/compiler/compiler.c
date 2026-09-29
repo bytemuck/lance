@@ -1,5 +1,6 @@
 #include "compiler_internal.h"
 #include "diag.h"
+#include "memory.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -12,29 +13,82 @@ void CompilerError(Compiler* compiler, const uint32_t line, const uint32_t colum
     vsnprintf(message, sizeof(message), format, args);
     va_end(args);
 
-    ReportError("Type Error", SOURCE_LOC(compiler->currentFile, line, column), "%s", message);
+    const char* file = compiler->module ? compiler->module->ast->file : nullptr;
+    ReportError("Type Error", SOURCE_LOC(file, line, column), "%s", message);
     compiler->hadError = true;
 }
 
 void InitializeCompiler(Compiler* compiler) {
     *compiler = (Compiler){0};
-    compiler->globals = CreateSymbolTable(nullptr);
+    compiler->builtins = CreateSymbolTable(nullptr);
+    compiler->globals = compiler->builtins;
     InitArena(&compiler->types);
+    InitArena(&compiler->specializations);
 
     // Primitive operators are polymorphic CPU operations. Their concrete
     // function type is supplied by the surrounding instance or call.
     for (size_t i = 0; i < PRIMITIVE_OP_COUNT; i++) {
-        SymbolTableInsert(compiler->globals, kPrimitiveOperators[i].name, SYMBOL_BUILTIN, nullptr, nullptr);
+        SymbolTableInsert(compiler->builtins, kPrimitiveOperators[i].name, SYMBOL_BUILTIN, nullptr, nullptr);
     }
-    SymbolTableInsert(compiler->globals, LANCE_PRINT_NAME, SYMBOL_BUILTIN, nullptr, nullptr);
+    SymbolTableInsert(compiler->builtins, LANCE_PRINT_NAME, SYMBOL_BUILTIN, nullptr, nullptr);
 }
 
 void FreeCompiler(Compiler* compiler) {
-    FreeSymbolTable(compiler->globals);
+    for (size_t i = 0; i < compiler->moduleCount; i++) {
+        FreeSymbolTable(compiler->modules[i].scope);
+    }
+    FREE_ARRAY(CompilerModule, compiler->modules, compiler->moduleCount);
+    compiler->modules = nullptr;
+    compiler->moduleCount = 0;
+    FreeSymbolTable(compiler->builtins);
+    compiler->builtins = nullptr;
     compiler->globals = nullptr;
+    compiler->module = nullptr;
     VEC_FREE(compiler->interfaces);
     VEC_FREE(compiler->instances);
     FreeArena(&compiler->types);
+    FreeArena(&compiler->specializations);
+}
+
+// ---- Modules -----------------------------------------------------------------
+
+void EnterModule(Compiler* compiler, const CompilerModule* module) {
+    compiler->module = module;
+    compiler->globals = module ? module->scope : compiler->builtins;
+}
+
+const CompilerModule* ModuleOfDecl(const Compiler* compiler, const AstDecl* decl) {
+    for (size_t i = 0; i < compiler->moduleCount; i++) {
+        const AstModule* ast = compiler->modules[i].ast;
+        if (decl >= ast->declarations && decl < ast->declarations + ast->count) return &compiler->modules[i];
+    }
+    return nullptr;
+}
+
+static const CompilerModule* FindCompilerModule(const Compiler* compiler, const AstModule* ast) {
+    for (size_t i = 0; i < compiler->moduleCount; i++) {
+        if (compiler->modules[i].ast == ast) return &compiler->modules[i];
+    }
+    return nullptr;
+}
+
+// One scope per module, linked to the scopes of the modules it imports.
+static void CreateModuleScopes(Compiler* compiler, AstModule* const* modules, const size_t moduleCount) {
+    compiler->moduleCount = moduleCount;
+    compiler->modules = ALLOCATE(CompilerModule, moduleCount);
+    for (size_t i = 0; i < moduleCount; i++) {
+        SymbolTable* scope = CreateSymbolTable(compiler->builtins);
+        scope->moduleName = modules[i]->name;
+        compiler->modules[i] = (CompilerModule){ .ast = modules[i], .scope = scope };
+    }
+
+    for (size_t i = 0; i < moduleCount; i++) {
+        const AstModule* ast = modules[i];
+        for (size_t j = 0; j < ast->importCount; j++) {
+            const CompilerModule* target = FindCompilerModule(compiler, ast->imports[j].module);
+            if (target) SymbolTableAddImport(compiler->modules[i].scope, ast->imports[j].alias, target->scope);
+        }
+    }
 }
 
 // ---- Declaration roles -------------------------------------------------------
@@ -52,7 +106,7 @@ typedef enum {
 } DeclRole;
 
 static bool IsTypeFunctionName(const Compiler* compiler, const char* name) {
-    const Symbol* symbol = SymbolTableLookupCurrentScope(compiler->globals, name);
+    const Symbol* symbol = SymbolTableLookup(compiler->globals, name);
     return symbol && symbol->kind == SYMBOL_TYPE_FUNCTION;
 }
 
@@ -94,24 +148,42 @@ static DeclRole ClassifyDecl(const Compiler* compiler, const AstDecl* decl) {
 typedef struct {
     const AstDecl* decl;
     DeclRole role;
+    const CompilerModule* module;
 } ClassifiedDecl;
 
 typedef VEC(ClassifiedDecl) ClassifiedDeclList;
 
 // Pass 1: declare every type-level name, so later passes can tell types from values.
-static void CollectTypeSignatures(Compiler* compiler, const AstModule* module) {
-    for (size_t i = 0; i < module->count; i++) {
-        const AstDecl* decl = &module->declarations[i];
-        if (decl->kind != AST_DECL_TYPE_ANNOTATION || decl->paramCount != 0 || !decl->name ||
-            !AstTypeIsType(decl->typeAnnotation)) {
-            continue;
-        }
+static void CollectTypeSignatures(Compiler* compiler) {
+    for (size_t m = 0; m < compiler->moduleCount; m++) {
+        EnterModule(compiler, &compiler->modules[m]);
+        const AstModule* module = compiler->modules[m].ast;
 
-        compiler->currentFile = decl->file;
-        const SymbolKind kind = decl->typeAnnotation->kind == AST_TYPE_FUNCTION ? SYMBOL_TYPE_FUNCTION : SYMBOL_TYPE;
-        LanceType* type = ResolveAstType(compiler, decl->typeAnnotation, compiler->globals);
-        SymbolTableInsert(compiler->globals, decl->name, kind, type, (AstDecl*)decl);
+        for (size_t i = 0; i < module->count; i++) {
+            const AstDecl* decl = &module->declarations[i];
+            if (decl->kind != AST_DECL_TYPE_ANNOTATION || decl->paramCount != 0 || !decl->name ||
+                !AstTypeIsType(decl->typeAnnotation)) {
+                continue;
+            }
+
+            const SymbolKind kind = decl->typeAnnotation->kind == AST_TYPE_FUNCTION ? SYMBOL_TYPE_FUNCTION : SYMBOL_TYPE;
+            LanceType* type = ResolveAstType(compiler, decl->typeAnnotation, compiler->globals);
+            SymbolTableInsert(compiler->globals, decl->name, kind, type, (AstDecl*)decl);
+        }
     }
+}
+
+static ClassifiedDeclList ClassifyDecls(Compiler* compiler) {
+    ClassifiedDeclList decls = {0};
+    for (size_t m = 0; m < compiler->moduleCount; m++) {
+        const CompilerModule* module = &compiler->modules[m];
+        EnterModule(compiler, module);
+        for (size_t i = 0; i < module->ast->count; i++) {
+            const AstDecl* decl = &module->ast->declarations[i];
+            VEC_PUSH(decls, ((ClassifiedDecl){ .decl = decl, .role = ClassifyDecl(compiler, decl), .module = module }));
+        }
+    }
+    return decls;
 }
 
 // Pass 2: attach type function bodies (`Vec T = {...}`), register interfaces,
@@ -120,6 +192,7 @@ static void DefineTypes(Compiler* compiler, const ClassifiedDeclList* decls) {
     for (size_t i = 0; i < decls->count; i++) {
         if (decls->items[i].role != DECL_ROLE_TYPE_DEFINITION) continue;
         const AstDecl* decl = decls->items[i].decl;
+        EnterModule(compiler, decls->items[i].module);
 
         Symbol* symbol = SymbolTableLookupCurrentScope(compiler->globals, decl->name);
         if (symbol->kind == SYMBOL_TYPE_FUNCTION && decl->body->kind == AST_EXPR_TYPE) {
@@ -131,11 +204,11 @@ static void DefineTypes(Compiler* compiler, const ClassifiedDeclList* decls) {
     for (size_t i = 0; i < decls->count; i++) {
         if (decls->items[i].role != DECL_ROLE_TYPE_DEFINITION) continue;
         const AstDecl* decl = decls->items[i].decl;
+        EnterModule(compiler, decls->items[i].module);
 
         Symbol* symbol = SymbolTableLookupCurrentScope(compiler->globals, decl->name);
         if (symbol->kind != SYMBOL_TYPE || decl->paramCount != 0) continue;
 
-        compiler->currentFile = decl->file;
         symbol->valueDecl = (AstDecl*)decl;
         LanceType* evaluated = EvalTypeExpr(compiler, decl->body, compiler->globals);
         if (!evaluated) {
@@ -154,15 +227,16 @@ static void CollectInstances(Compiler* compiler, const ClassifiedDeclList* decls
     for (size_t i = 0; i < decls->count; i++) {
         if (decls->items[i].role != DECL_ROLE_INSTANCE) continue;
         const AstDecl* decl = decls->items[i].decl;
+        EnterModule(compiler, decls->items[i].module);
 
-        compiler->currentFile = decl->file;
+        const Symbol* interface = SymbolTableLookup(compiler->globals, decl->name);
         const LanceType* target = LookupTypeName(decl->params[0], compiler->globals);
         if (LookupInstance(compiler, decl->name, target)) {
             CompilerError(compiler, decl->line, decl->column, "Duplicate instance '%s %s'",
                           decl->name, decl->params[0]);
             continue;
         }
-        RegisterInstance(compiler, decl->name, target, decl);
+        RegisterInstance(compiler, interface, target, decl);
     }
 }
 
@@ -171,8 +245,8 @@ static void CollectValueSignatures(Compiler* compiler, const ClassifiedDeclList*
     for (size_t i = 0; i < decls->count; i++) {
         if (decls->items[i].role != DECL_ROLE_VALUE_SIGNATURE) continue;
         const AstDecl* decl = decls->items[i].decl;
+        EnterModule(compiler, decls->items[i].module);
 
-        compiler->currentFile = decl->file;
         if (decl->paramCount != 0) {
             CompilerError(compiler, decl->line, decl->column,
                           "Type annotation for '%s' cannot have parameters", decl->name);
@@ -199,16 +273,15 @@ static void AttachValueBodies(Compiler* compiler, const ClassifiedDeclList* decl
     for (size_t i = 0; i < decls->count; i++) {
         if (decls->items[i].role != DECL_ROLE_VALUE) continue;
         const AstDecl* decl = decls->items[i].decl;
+        EnterModule(compiler, decls->items[i].module);
 
         Symbol* symbol = SymbolTableLookupCurrentScope(compiler->globals, decl->name);
         if (!symbol || symbol->kind != SYMBOL_VALUE) {
-            compiler->currentFile = decl->file;
             CompilerError(compiler, decl->line, decl->column,
                           "Binding '%s' missing explicit type annotation", decl->name);
             continue;
         }
         if (symbol->valueDecl) {
-            compiler->currentFile = decl->file;
             CompilerError(compiler, decl->line, decl->column, "Duplicate definition of '%s'", decl->name);
             continue;
         }
@@ -222,37 +295,33 @@ static void LowerValues(Compiler* compiler, const ClassifiedDeclList* decls) {
     for (size_t i = 0; i < decls->count; i++) {
         if (decls->items[i].role != DECL_ROLE_VALUE) continue;
         const AstDecl* decl = decls->items[i].decl;
+        EnterModule(compiler, decls->items[i].module);
 
         const Symbol* symbol = SymbolTableLookupCurrentScope(compiler->globals, decl->name);
         if (!symbol || symbol->valueDecl != decl || IsGenericTemplate(symbol) || !symbol->type) continue;
 
-        compiler->currentFile = decl->file;
-        LowerBinding(compiler, decl->name, decl->params, decl->paramCount, symbol->type,
+        LowerBinding(compiler, symbol->globalName, decl->params, decl->paramCount, symbol->type,
                      decl->body, decl->line, decl->column);
     }
 }
 
-TypedModule* CompileModule(Compiler* compiler, const AstModule* astModule) {
-    if (!astModule) return nullptr;
+TypedModule* CompileProgram(Compiler* compiler, AstModule* const* modules, const size_t moduleCount) {
+    if (!modules || moduleCount == 0) return nullptr;
 
     compiler->typedModule = (TypedModule*)calloc(1, sizeof(TypedModule));
+    CreateModuleScopes(compiler, modules, moduleCount);
 
-    CollectTypeSignatures(compiler, astModule);
-
-    ClassifiedDeclList decls = {0};
-    for (size_t i = 0; i < astModule->count; i++) {
-        const AstDecl* decl = &astModule->declarations[i];
-        VEC_PUSH(decls, ((ClassifiedDecl){ .decl = decl, .role = ClassifyDecl(compiler, decl) }));
-    }
-
+    CollectTypeSignatures(compiler);
+    ClassifiedDeclList decls = ClassifyDecls(compiler);
     DefineTypes(compiler, &decls);
     CollectInstances(compiler, &decls);
     CollectValueSignatures(compiler, &decls);
     AttachValueBodies(compiler, &decls);
     LowerValues(compiler, &decls);
-
     VEC_FREE(decls);
-    compiler->currentFile = nullptr;
+
+    EnterModule(compiler, nullptr);
+    if (!compiler->hadError) ResolveGlobalSlots(compiler, compiler->typedModule);
 
     if (compiler->hadError) {
         FreeTypedModule(compiler->typedModule);

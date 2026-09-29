@@ -50,7 +50,7 @@ static char Peek(const Lexer* lexer) {
 }
 
 static char PeekNext(const Lexer* lexer) {
-    return lexer->source[lexer->end + 1];
+    return Peek(lexer) == '\0' ? '\0' : lexer->source[lexer->end + 1];
 }
 
 static char Advance(Lexer* lexer) {
@@ -138,69 +138,41 @@ static Token ErrorToken(const Lexer* lexer, const char* message) {
     return token;
 }
 
+static const struct {
+    const char* word;
+    TokenType type;
+} kKeywords[] = {
+    { "type",   TOKEN_KEYWORD_TYPE },
+    { "i8",     TOKEN_KEYWORD_I8 },
+    { "i16",    TOKEN_KEYWORD_I16 },
+    { "i32",    TOKEN_KEYWORD_I32 },
+    { "i64",    TOKEN_KEYWORD_I64 },
+    { "u8",     TOKEN_KEYWORD_U8 },
+    { "u16",    TOKEN_KEYWORD_U16 },
+    { "u32",    TOKEN_KEYWORD_U32 },
+    { "u64",    TOKEN_KEYWORD_U64 },
+    { "f32",    TOKEN_KEYWORD_F32 },
+    { "f64",    TOKEN_KEYWORD_F64 },
+    { "bool",   TOKEN_KEYWORD_BOOL },
+    { "string", TOKEN_KEYWORD_STRING },
+    { "true",   TOKEN_BOOL_LIT },
+    { "false",  TOKEN_BOOL_LIT },
+    { "import", TOKEN_IMPORT },
+    { "if",     TOKEN_IF },
+    { "then",   TOKEN_THEN },
+    { "else",   TOKEN_ELSE },
+    { "let",    TOKEN_LET },
+    { "in",     TOKEN_IN },
+};
+
 static Token LexIdentifier(Lexer* lexer) {
     for (char c = Peek(lexer); IsAlphaNumeric(c); Advance(lexer), c = Peek(lexer)) {}
 
     const uint32_t length = lexer->end - lexer->begin;
-
-    if (MatchN(lexer, "type", length)) {
-        return MakeToken(lexer, TOKEN_KEYWORD_TYPE);
-    }
-
-    if (MatchN(lexer, "i8", length)) {
-        return MakeToken(lexer, TOKEN_KEYWORD_I8);
-    }
-
-    if (MatchN(lexer, "i16", length)) {
-        return MakeToken(lexer, TOKEN_KEYWORD_I16);
-    }
-
-    if (MatchN(lexer, "i32", length)) {
-        return MakeToken(lexer, TOKEN_KEYWORD_I32);
-    }
-
-    if (MatchN(lexer, "i64", length)) {
-        return MakeToken(lexer, TOKEN_KEYWORD_I64);
-    }
-
-    if (MatchN(lexer, "u8", length)) {
-        return MakeToken(lexer, TOKEN_KEYWORD_U8);
-    }
-
-    if (MatchN(lexer, "u16", length)) {
-        return MakeToken(lexer, TOKEN_KEYWORD_U16);
-    }
-
-    if (MatchN(lexer, "u32", length)) {
-        return MakeToken(lexer, TOKEN_KEYWORD_U32);
-    }
-
-    if (MatchN(lexer, "u64", length)) {
-        return MakeToken(lexer, TOKEN_KEYWORD_U64);
-    }
-
-    if (MatchN(lexer, "f32", length)) {
-        return MakeToken(lexer, TOKEN_KEYWORD_F32);
-    }
-
-    if (MatchN(lexer, "f64", length)) {
-        return MakeToken(lexer, TOKEN_KEYWORD_F64);
-    }
-
-    if (MatchN(lexer, "bool", length)) {
-        return MakeToken(lexer, TOKEN_KEYWORD_BOOL);
-    }
-
-    if (MatchN(lexer, "string", length)) {
-        return MakeToken(lexer, TOKEN_KEYWORD_STRING);
-    }
-
-    if (MatchN(lexer, "true", length)) {
-        return MakeToken(lexer, TOKEN_BOOL_LIT);
-    }
-
-    if (MatchN(lexer, "false", length)) {
-        return MakeToken(lexer, TOKEN_BOOL_LIT);
+    for (size_t i = 0; i < sizeof(kKeywords) / sizeof(kKeywords[0]); i++) {
+        if (MatchN(lexer, kKeywords[i].word, length)) {
+            return MakeToken(lexer, kKeywords[i].type);
+        }
     }
 
     return MakeToken(lexer, TOKEN_IDENT);

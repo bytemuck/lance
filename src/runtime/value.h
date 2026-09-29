@@ -33,8 +33,6 @@ typedef struct {
     size_t appliedCount;
 } NativeFunctionValue;
 
-typedef struct Environment Environment;
-
 typedef struct {
     const char* name;
     Value* value;
@@ -45,7 +43,6 @@ typedef struct {
     Value** appliedArgs;
     size_t appliedCount;
     size_t totalParams;
-    Environment* closureEnv;
 } ClosureValue;
 
 struct Value {
@@ -77,7 +74,7 @@ Value* MakeTypeValue(LanceType* type);
 Value* MakeUnitValue(void);
 Value* MakeNativeFnValue(const char* name, NativeFn fn, size_t arity, Value** appliedArgs, size_t appliedCount);
 Value* MakeStructValue(const char* typeName, StructFieldValue* fields, size_t fieldCount);
-Value* MakeClosureValue(const TypedDecl* decl, Environment* env, Value** appliedArgs, size_t appliedCount);
+Value* MakeClosureValue(const TypedDecl* decl, Value** appliedArgs, size_t appliedCount);
 
 Value* CopyValue(const Value* value);
 void PrintValue(const Value* value);

@@ -1,5 +1,4 @@
 #include "compiler_internal.h"
-#include "string_pool.h"
 
 #include <string.h>
 
@@ -11,33 +10,41 @@ void RegisterInterface(Compiler* compiler, const AstDecl* definition) {
     }
 
     VEC_PUSH(compiler->interfaces, ((CompilerInterface){
-        .name = InternCString(definition->name),
+        .symbol = SymbolTableLookupCurrentScope(compiler->globals, definition->name),
         .typeParam = definition->params[0],
         .methods = definition->body->typeExpr,
+        .module = compiler->module,
     }));
 }
 
-const CompilerInterface* LookupInterface(const Compiler* compiler, const char* name) {
-    const char* interned = InternCString(name);
+static const CompilerInterface* FindInterface(const Compiler* compiler, const Symbol* symbol) {
     for (size_t i = 0; i < compiler->interfaces.count; i++) {
-        if (compiler->interfaces.items[i].name == interned) return &compiler->interfaces.items[i];
+        if (compiler->interfaces.items[i].symbol == symbol) return &compiler->interfaces.items[i];
     }
     return nullptr;
 }
 
-void RegisterInstance(Compiler* compiler, const char* interfaceName, const LanceType* type, const AstDecl* decl) {
+// An interface is visible where its name resolves to its own symbol.
+static bool IsInterfaceVisible(const Compiler* compiler, const Symbol* interface) {
+    return SymbolTableLookup(compiler->globals, interface->name) == interface;
+}
+
+void RegisterInstance(Compiler* compiler, const Symbol* interface, const LanceType* type, const AstDecl* decl) {
     VEC_PUSH(compiler->instances, ((CompilerInstance){
-        .interfaceName = InternCString(interfaceName),
+        .interface = interface,
         .targetType = type,
         .instanceDecl = decl,
+        .module = compiler->module,
     }));
 }
 
 const AstDecl* LookupInstance(const Compiler* compiler, const char* interfaceName, const LanceType* type) {
-    const char* interned = InternCString(interfaceName);
+    const Symbol* interface = SymbolTableLookup(compiler->globals, interfaceName);
+    if (!interface) return nullptr;
+
     for (size_t i = 0; i < compiler->instances.count; i++) {
         const CompilerInstance* instance = &compiler->instances.items[i];
-        if (instance->interfaceName == interned && TypesAreEqual(instance->targetType, type)) {
+        if (instance->interface == interface && TypesAreEqual(instance->targetType, type)) {
             return instance->instanceDecl;
         }
     }
@@ -75,19 +82,22 @@ InstanceMethodLookup LookupInstanceMethodForType(Compiler* compiler, const Lance
 
     for (size_t i = 0; i < compiler->instances.count; i++) {
         const CompilerInstance* instance = &compiler->instances.items[i];
-        if (!TypesAreEqual(instance->targetType, targetType)) continue;
+        if (!TypesAreEqual(instance->targetType, targetType) || !IsInterfaceVisible(compiler, instance->interface)) {
+            continue;
+        }
 
         const AstExpr* method = FindInstanceMethod(instance->instanceDecl, methodName);
         if (!method) continue;
 
         result.instanceDecl = instance->instanceDecl;
         result.methodExpr = method;
+        result.module = instance->module;
 
-        const CompilerInterface* interface = LookupInterface(compiler, instance->interfaceName);
+        const CompilerInterface* interface = FindInterface(compiler, instance->interface);
         const AstType* signature = FindMethodSignature(interface, methodName);
         if (signature) {
             result.methodType = InstantiateGenericType(compiler, signature, interface->typeParam,
-                                                       targetType, compiler->globals);
+                                                       targetType, interface->module->scope);
         }
         return result;
     }
@@ -96,7 +106,9 @@ InstanceMethodLookup LookupInstanceMethodForType(Compiler* compiler, const Lance
 
 bool HasInstanceMethod(const Compiler* compiler, const char* methodName) {
     for (size_t i = 0; i < compiler->instances.count; i++) {
-        if (FindInstanceMethod(compiler->instances.items[i].instanceDecl, methodName)) {
+        const CompilerInstance* instance = &compiler->instances.items[i];
+        if (IsInterfaceVisible(compiler, instance->interface) &&
+            FindInstanceMethod(instance->instanceDecl, methodName)) {
             return true;
         }
     }

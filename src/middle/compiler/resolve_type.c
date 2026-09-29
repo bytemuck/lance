@@ -110,7 +110,9 @@ LanceType* EvalTypeExpr(Compiler* compiler, const AstExpr* expr, const SymbolTab
             LanceType* argType = EvalTypeExpr(compiler, expr->call.argument, scope);
             const AstDecl* definition = callee->valueDecl;
 
-            SymbolTable* typeScope = CreateSymbolTable(compiler->globals);
+            // The body is evaluated where the type function is defined.
+            const CompilerModule* module = ModuleOfDecl(compiler, definition);
+            SymbolTable* typeScope = CreateSymbolTable(module ? module->scope : compiler->builtins);
             if (definition->paramCount > 0) {
                 SymbolTableInsert(typeScope, definition->params[0], SYMBOL_TYPE, argType, nullptr);
             }

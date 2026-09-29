@@ -116,12 +116,31 @@ static TypedExpr* LowerFloatLit(const AstExpr* expr, LanceType* expectedType) {
     return CreateTypedFloatLitExpr(expr->floatVal, type, expr->line, expr->column);
 }
 
+// A reference to a global or local symbol.
+static TypedExpr* LowerSymbolRef(Compiler* compiler, const AstExpr* expr, const Symbol* symbol) {
+    switch (symbol->kind) {
+        case SYMBOL_LOCAL:
+            return CreateTypedVarExpr(symbol->name, SLOT_REF(SLOT_LOCAL, symbol->slot), symbol->type,
+                                      expr->line, expr->column);
+        case SYMBOL_VALUE:
+            return CreateTypedVarExpr(symbol->globalName, SLOT_REF(SLOT_GLOBAL, 0), symbol->type,
+                                      expr->line, expr->column);
+        case SYMBOL_TYPE:
+        case SYMBOL_TYPE_FUNCTION:
+        case SYMBOL_BUILTIN:
+            break;
+    }
+    CompilerError(compiler, expr->line, expr->column, "'%s' cannot be used as a value", symbol->name);
+    return nullptr;
+}
+
 static TypedExpr* LowerIdent(Compiler* compiler, const AstExpr* expr, const SymbolTable* scope, LanceType* expectedType) {
     const char* name = expr->identName;
 
     if (strcmp(name, LANCE_PRINT_NAME) == 0) {
         LanceType* printType = expectedType ? expectedType : NewFunctionType(compiler, GetTypeString(), GetTypeUnit());
-        return CreateTypedVarExpr(InternCString(LANCE_PRINT_NAME), printType, expr->line, expr->column);
+        return CreateTypedVarExpr(InternCString(LANCE_PRINT_NAME), SLOT_REF(SLOT_NATIVE, NATIVE_PRINT), printType,
+                                  expr->line, expr->column);
     }
 
     const PrimitiveInfo* primitive = LookupPrimitiveOperator(name);
@@ -133,7 +152,8 @@ static TypedExpr* LowerIdent(Compiler* compiler, const AstExpr* expr, const Symb
                           "Primitive operator '%s' requires a concrete numeric type", name);
             return nullptr;
         }
-        return CreateTypedVarExpr(InternCString(primitive->name), expectedType, expr->line, expr->column);
+        return CreateTypedVarExpr(InternCString(primitive->name), SLOT_REF(SLOT_NATIVE, primitive->op), expectedType,
+                                  expr->line, expr->column);
     }
 
     const size_t length = strlen(name);
@@ -143,19 +163,49 @@ static TypedExpr* LowerIdent(Compiler* compiler, const AstExpr* expr, const Symb
     }
 
     if (GetPrimitiveTypeByName(name)) {
-        return CreateTypedVarExpr(name, GetTypeType(), expr->line, expr->column);
+        return CreateTypedVarExpr(name, SLOT_REF(SLOT_TYPE, 0), GetTypeType(), expr->line, expr->column);
     }
 
     const Symbol* symbol = SymbolTableLookup(scope, name);
     if (!symbol) {
-        CompilerError(compiler, expr->line, expr->column, "Undefined identifier '%s'", name);
+        if (SymbolTableIsAmbiguous(scope, name)) {
+            CompilerError(compiler, expr->line, expr->column,
+                          "'%s' is declared by several imported modules; qualify it as module.%s", name, name);
+        } else {
+            CompilerError(compiler, expr->line, expr->column, "Undefined identifier '%s'", name);
+        }
         return nullptr;
     }
 
-    return CreateTypedVarExpr(symbol->name, symbol->type, expr->line, expr->column);
+    return LowerSymbolRef(compiler, expr, symbol);
+}
+
+// ---- Qualified names ---------------------------------------------------------
+
+// `util.name` where `util` is an imported module (and not a shadowing local
+// or global) parses as a field access; returns that module's scope.
+static const SymbolTable* QualifyingModule(const AstExpr* expr, const SymbolTable* scope) {
+    if (expr->kind != AST_EXPR_FIELD_ACCESS || expr->fieldAccess.target->kind != AST_EXPR_IDENT) return nullptr;
+    return SymbolTableFindModule(scope, expr->fieldAccess.target->identName);
+}
+
+// The symbol `util.name` refers to. Reports an error if `util` has no `name`.
+static const Symbol* LookupQualifiedName(Compiler* compiler, const AstExpr* expr, const SymbolTable* module) {
+    const Symbol* symbol = SymbolTableLookupCurrentScope(module, expr->fieldAccess.fieldName);
+    if (!symbol) {
+        CompilerError(compiler, expr->line, expr->column, "Module '%s' has no declaration '%s'",
+                      expr->fieldAccess.target->identName, expr->fieldAccess.fieldName);
+    }
+    return symbol;
 }
 
 static TypedExpr* LowerFieldAccess(Compiler* compiler, const AstExpr* expr, const SymbolTable* scope) {
+    const SymbolTable* module = QualifyingModule(expr, scope);
+    if (module) {
+        const Symbol* symbol = LookupQualifiedName(compiler, expr, module);
+        return symbol ? LowerSymbolRef(compiler, expr, symbol) : nullptr;
+    }
+
     const char* fieldName = expr->fieldAccess.fieldName;
     TypedExpr* target = LowerExpr(compiler, expr->fieldAccess.target, scope, nullptr);
     if (!target) return nullptr;
@@ -225,8 +275,8 @@ static TypedExpr* LowerPrintCall(Compiler* compiler, const AstExpr* expr, const 
     if (!arg) return nullptr;
 
     LanceType* printType = NewFunctionType(compiler, arg->type, GetTypeUnit());
-    TypedExpr* callee = CreateTypedVarExpr(InternCString(LANCE_PRINT_NAME), printType,
-                                           expr->call.callee->line, expr->call.callee->column);
+    TypedExpr* callee = CreateTypedVarExpr(InternCString(LANCE_PRINT_NAME), SLOT_REF(SLOT_NATIVE, NATIVE_PRINT),
+                                           printType, expr->call.callee->line, expr->call.callee->column);
     return CreateTypedCallExpr(callee, arg, GetTypeUnit(), expr->line, expr->column);
 }
 
@@ -297,7 +347,12 @@ static TypedExpr* LowerInterfaceBinary(Compiler* compiler, const AstExpr* expr, 
         return nullptr;
     }
 
-    TypedExpr* callee = LowerExpr(compiler, lookup.methodExpr, scope, operatorType);
+    // The method belongs to the instance's module, not to the caller's.
+    const CompilerModule* callerModule = compiler->module;
+    EnterModule(compiler, lookup.module);
+    TypedExpr* callee = LowerExpr(compiler, lookup.methodExpr, compiler->globals, operatorType);
+    EnterModule(compiler, callerModule);
+
     TypedExpr* rhs = LowerExpr(compiler, spine->args[1], scope, operatorType->function.returnType->function.paramType);
     return BuildBinaryApplication(compiler, expr, callee, lhs, rhs, operatorType);
 }
@@ -320,7 +375,7 @@ static TypedExpr* LowerGenericCall(Compiler* compiler, const AstExpr* expr, cons
 
     const Symbol* specialization = argError
         ? nullptr
-        : SpecializeGenericFunction(compiler, symbol, args, spine->argCount, scope, expr->line, expr->column);
+        : SpecializeGenericFunction(compiler, symbol, args, spine->argCount, expr->line, expr->column);
 
     if (!specialization || !specialization->type) {
         for (size_t i = 0; i < spine->argCount; i++) FreeTypedExpr(args[i]);
@@ -328,7 +383,7 @@ static TypedExpr* LowerGenericCall(Compiler* compiler, const AstExpr* expr, cons
         return nullptr;
     }
 
-    TypedExpr* result = CreateTypedVarExpr(specialization->name, specialization->type,
+    TypedExpr* result = CreateTypedVarExpr(specialization->globalName, SLOT_REF(SLOT_GLOBAL, 0), specialization->type,
                                            spine->root->line, spine->root->column);
     LanceType* signature = specialization->type;
     size_t applied = 0;
@@ -397,13 +452,16 @@ static TypedExpr* LowerCall(Compiler* compiler, const AstExpr* expr, const Symbo
         } else if (spine.argCount == 2 && HasInstanceMethod(compiler, name)) {
             result = LowerInterfaceBinary(compiler, expr, &spine, scope, expectedType, &handled);
         }
+    }
 
-        if (!handled) {
-            const Symbol* symbol = SymbolTableLookup(scope, name);
-            if (IsConstrainedGeneric(symbol)) {
-                result = LowerGenericCall(compiler, expr, &spine, symbol, scope);
-                handled = true;
-            }
+    if (!handled) {
+        const SymbolTable* module = QualifyingModule(spine.root, scope);
+        const Symbol* symbol = module ? SymbolTableLookupCurrentScope(module, spine.root->fieldAccess.fieldName)
+                            : spine.root->kind == AST_EXPR_IDENT ? SymbolTableLookup(scope, spine.root->identName)
+                            : nullptr;
+        if (IsConstrainedGeneric(symbol)) {
+            result = LowerGenericCall(compiler, expr, &spine, symbol, scope);
+            handled = true;
         }
     }
 
@@ -412,6 +470,49 @@ static TypedExpr* LowerCall(Compiler* compiler, const AstExpr* expr, const Symbo
 }
 
 // ---- Dispatcher --------------------------------------------------------------
+
+static TypedExpr* LowerIf(Compiler* compiler, const AstExpr* expr, const SymbolTable* scope, LanceType* expectedType) {
+    TypedExpr* condition = LowerExpr(compiler, expr->conditional.condition, scope, GetTypeBool());
+    TypedExpr* thenBranch = LowerExpr(compiler, expr->conditional.thenBranch, scope, expectedType);
+    TypedExpr* elseBranch = LowerExpr(compiler, expr->conditional.elseBranch, scope,
+                                      thenBranch ? thenBranch->type : expectedType);
+    if (!condition || !thenBranch || !elseBranch) goto invalid;
+    if (!TypesAreEqual(condition->type, GetTypeBool())) {
+        CompilerError(compiler, expr->conditional.condition->line, expr->conditional.condition->column,
+                      "If condition must be 'bool', got '%s'", TypeToString(condition->type));
+        goto invalid;
+    }
+    if (!TypesAreEqual(thenBranch->type, elseBranch->type)) {
+        CompilerError(compiler, expr->line, expr->column, "If branches must have the same type (got '%s' and '%s')",
+                      TypeToString(thenBranch->type), TypeToString(elseBranch->type));
+        goto invalid;
+    }
+    return CreateTypedIfExpr(condition, thenBranch, elseBranch, thenBranch->type, expr->line, expr->column);
+
+invalid:
+    FreeTypedExpr(condition);
+    FreeTypedExpr(thenBranch);
+    FreeTypedExpr(elseBranch);
+    return nullptr;
+}
+
+// `let name = value in body`: the value gets the next free slot of the call frame.
+static TypedExpr* LowerLet(Compiler* compiler, const AstExpr* expr, const SymbolTable* scope, LanceType* expectedType) {
+    TypedExpr* value = LowerExpr(compiler, expr->let.value, scope, nullptr);
+    if (!value) return nullptr;
+
+    const size_t slot = compiler->frameSize++;
+    SymbolTable* letScope = CreateSymbolTable((SymbolTable*)scope);
+    SymbolTableInsertLocal(letScope, expr->let.name, value->type, slot);
+    TypedExpr* body = LowerExpr(compiler, expr->let.body, letScope, expectedType);
+    FreeSymbolTable(letScope);
+
+    if (!body) {
+        FreeTypedExpr(value);
+        return nullptr;
+    }
+    return CreateTypedLetExpr(slot, value, body, expr->line, expr->column);
+}
 
 TypedExpr* LowerExpr(Compiler* compiler, const AstExpr* expr, const SymbolTable* scope, LanceType* expectedType) {
     if (!expr) return nullptr;
@@ -425,6 +526,8 @@ TypedExpr* LowerExpr(Compiler* compiler, const AstExpr* expr, const SymbolTable*
         case AST_EXPR_FIELD_ACCESS: return LowerFieldAccess(compiler, expr, scope);
         case AST_EXPR_STRUCT_VALUE: return LowerStructValue(compiler, expr, scope, expectedType);
         case AST_EXPR_CALL:         return LowerCall(compiler, expr, scope, expectedType);
+        case AST_EXPR_IF:           return LowerIf(compiler, expr, scope, expectedType);
+        case AST_EXPR_LET:          return LowerLet(compiler, expr, scope, expectedType);
         case AST_EXPR_COMPTIME:     return LowerExpr(compiler, expr->comptime.inner, scope, expectedType);
 
         case AST_EXPR_TYPE:
@@ -437,30 +540,31 @@ TypedExpr* LowerExpr(Compiler* compiler, const AstExpr* expr, const SymbolTable*
 
 bool LowerBinding(Compiler* compiler, const char* name, const char* const* params, const size_t paramCount,
                   LanceType* signature, const AstExpr* body, const uint32_t line, const uint32_t column) {
+    // Bindings nest when lowering a body specializes a generic function.
+    const size_t outerFrameSize = compiler->frameSize;
+    compiler->frameSize = paramCount;
+
     SymbolTable* localScope = CreateSymbolTable(compiler->globals);
     LanceType* bodyType = signature;
+    TypedExpr* loweredBody = nullptr;
 
     for (size_t p = 0; p < paramCount; p++) {
         if (!bodyType || bodyType->kind != TYPE_FUNCTION) {
             CompilerError(compiler, line, column, "Binding '%s' has more parameters than its type '%s' allows",
                           name, TypeToString(signature));
-            FreeSymbolTable(localScope);
-            return false;
+            goto failed;
         }
-        SymbolTableInsert(localScope, params[p], SYMBOL_VALUE, bodyType->function.paramType, nullptr);
+        SymbolTableInsertLocal(localScope, params[p], bodyType->function.paramType, p);
         bodyType = bodyType->function.returnType;
     }
 
-    TypedExpr* loweredBody = LowerExpr(compiler, body, localScope, bodyType);
-    FreeSymbolTable(localScope);
-
-    if (!loweredBody) return false;
+    loweredBody = LowerExpr(compiler, body, localScope, bodyType);
+    if (!loweredBody) goto failed;
 
     if (bodyType && !TypesAreEqual(loweredBody->type, bodyType)) {
         CompilerError(compiler, line, column, "In binding '%s', expected '%s' but got '%s'",
                       name, TypeToString(bodyType), TypeToString(loweredBody->type));
-        FreeTypedExpr(loweredBody);
-        return false;
+        goto failed;
     }
 
     const char** paramsCopy = nullptr;
@@ -474,9 +578,18 @@ bool LowerBinding(Compiler* compiler, const char* name, const char* const* param
         .type = signature,
         .params = paramsCopy,
         .paramCount = paramCount,
+        .frameSize = compiler->frameSize,
         .body = loweredBody,
         .line = line,
         .column = column,
     });
+    FreeSymbolTable(localScope);
+    compiler->frameSize = outerFrameSize;
     return true;
+
+failed:
+    FreeTypedExpr(loweredBody);
+    FreeSymbolTable(localScope);
+    compiler->frameSize = outerFrameSize;
+    return false;
 }

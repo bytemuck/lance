@@ -64,4 +64,11 @@ static inline const PrimitiveInfo* LookupPrimitiveOperator(const char* name) {
 // Native functions that aren't operators.
 #define LANCE_PRINT_NAME "print"
 
+// Every native function has a fixed SLOT_NATIVE index: the primitive
+// operators first (a PrimitiveOp is its own index), then the others.
+typedef enum {
+    NATIVE_PRINT = PRIMITIVE_OP_COUNT,
+    NATIVE_COUNT
+} NativeId;
+
 #endif // LANCE_PRIMITIVES_H

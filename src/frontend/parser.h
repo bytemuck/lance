@@ -10,6 +10,7 @@
 
 typedef struct {
     Lexer *lexer;
+    Arena* arena; // Caller-owned; must outlive the parsed module and all its users
     Token current;
     Token peek;
 
@@ -19,7 +20,8 @@ typedef struct {
     bool panicMode; // Suppresses cascading errors until the next declaration
 } Parser;
 
-void InitializeParser(Parser* parser, Lexer *lexer, const char* fileName);
+void InitializeParser(Parser* parser, Lexer *lexer, const char* fileName, Arena* arena);
+// The returned module, its declarations, and partial parses belong to parser->arena.
 AstModule* ParseModule(Parser* parser);
 
 #endif //LANCE_PARSER_H

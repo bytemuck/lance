@@ -1,0 +1,6 @@
+bump :: i32 -> i32
+bump x = let x = +# x 1 in let y = x in *# y 2
+
+-- expect: 10
+main :: i32
+main = bump 4

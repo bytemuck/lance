@@ -35,6 +35,14 @@ typedef enum {
     TOKEN_KEYWORD_F64,  // 'f64'
     TOKEN_KEYWORD_IMPL_MAXIMUM,
 
+    // Declaration & Expression Keywords
+    TOKEN_IMPORT,       // 'import'
+    TOKEN_IF,           // 'if'
+    TOKEN_THEN,         // 'then'
+    TOKEN_ELSE,         // 'else'
+    TOKEN_LET,          // 'let'
+    TOKEN_IN,           // 'in'
+
     // Operators & Punctuation
     TOKEN_COLON_COLON,  // ::
     TOKEN_ARROW,        // ->

@@ -11,7 +11,7 @@ typedef struct {
 } InstanceBinding;
 
 // Copies `expr`, replacing `T.method` with the method bound by T's instance.
-static AstExpr* CloneAndSpecializeExpr(const AstExpr* expr, const InstanceBinding* bindings, size_t bindingCount) {
+static AstExpr* CloneAndSpecializeExpr(Arena* arena, const AstExpr* expr, const InstanceBinding* bindings, size_t bindingCount) {
     if (!expr) return nullptr;
 
     switch (expr->kind) {
@@ -23,43 +23,58 @@ static AstExpr* CloneAndSpecializeExpr(const AstExpr* expr, const InstanceBindin
                     if (strcmp(targetName, bindings[i].typeParam) == 0) {
                         const AstExpr* method = FindInstanceMethod(bindings[i].instanceDecl, expr->fieldAccess.fieldName);
                         if (method) {
-                            return CloneAndSpecializeExpr(method, bindings, bindingCount);
+                            return CloneAndSpecializeExpr(arena, method, bindings, bindingCount);
                         }
                     }
                 }
             }
-            return CreateFieldAccessExpr(
-                CloneAndSpecializeExpr(expr->fieldAccess.target, bindings, bindingCount),
+            return CreateFieldAccessExpr(arena,
+                CloneAndSpecializeExpr(arena, expr->fieldAccess.target, bindings, bindingCount),
                 expr->fieldAccess.fieldName,
                 expr->line, expr->column
             );
         }
 
         case AST_EXPR_CALL:
-            return CreateCallExpr(
-                CloneAndSpecializeExpr(expr->call.callee, bindings, bindingCount),
-                CloneAndSpecializeExpr(expr->call.argument, bindings, bindingCount),
+            return CreateCallExpr(arena,
+                CloneAndSpecializeExpr(arena, expr->call.callee, bindings, bindingCount),
+                CloneAndSpecializeExpr(arena, expr->call.argument, bindings, bindingCount),
+                expr->line, expr->column
+            );
+
+        case AST_EXPR_IF:
+            return CreateIfExpr(arena,
+                CloneAndSpecializeExpr(arena, expr->conditional.condition, bindings, bindingCount),
+                CloneAndSpecializeExpr(arena, expr->conditional.thenBranch, bindings, bindingCount),
+                CloneAndSpecializeExpr(arena, expr->conditional.elseBranch, bindings, bindingCount),
+                expr->line, expr->column
+            );
+
+        case AST_EXPR_LET:
+            return CreateLetExpr(arena, expr->let.name,
+                CloneAndSpecializeExpr(arena, expr->let.value, bindings, bindingCount),
+                CloneAndSpecializeExpr(arena, expr->let.body, bindings, bindingCount),
                 expr->line, expr->column
             );
 
         case AST_EXPR_STRUCT_VALUE: {
             const size_t count = expr->structValue.fieldCount;
-            AstFieldValue* fields = ALLOCATE(AstFieldValue, count);
+            AstFieldValue* fields = ARENA_ARRAY(arena, AstFieldValue, count);
             for (size_t i = 0; i < count; i++) {
                 fields[i].name = expr->structValue.fields[i].name;
-                fields[i].value = CloneAndSpecializeExpr(expr->structValue.fields[i].value, bindings, bindingCount);
+                fields[i].value = CloneAndSpecializeExpr(arena, expr->structValue.fields[i].value, bindings, bindingCount);
             }
-            return CreateStructValueExpr(fields, count, expr->line, expr->column);
+            return CreateStructValueExpr(arena, fields, count, expr->line, expr->column);
         }
 
-        case AST_EXPR_INT_LIT:    return CreateIntLitExpr(expr->intVal, expr->line, expr->column);
-        case AST_EXPR_FLOAT_LIT:  return CreateFloatLitExpr(expr->floatVal, expr->line, expr->column);
-        case AST_EXPR_BOOL_LIT:   return CreateBoolLitExpr(expr->boolVal, expr->line, expr->column);
-        case AST_EXPR_STRING_LIT: return CreateStringLitExpr(expr->stringVal, expr->line, expr->column);
-        case AST_EXPR_IDENT:      return CreateIdentExpr(expr->identName, expr->line, expr->column);
-        case AST_EXPR_TYPE:       return CreateTypeExpr(CloneAstType(expr->typeExpr), expr->line, expr->column);
+        case AST_EXPR_INT_LIT:    return CreateIntLitExpr(arena, expr->intVal, expr->line, expr->column);
+        case AST_EXPR_FLOAT_LIT:  return CreateFloatLitExpr(arena, expr->floatVal, expr->line, expr->column);
+        case AST_EXPR_BOOL_LIT:   return CreateBoolLitExpr(arena, expr->boolVal, expr->line, expr->column);
+        case AST_EXPR_STRING_LIT: return CreateStringLitExpr(arena, expr->stringVal, expr->line, expr->column);
+        case AST_EXPR_IDENT:      return CreateIdentExpr(arena, expr->identName, expr->line, expr->column);
+        case AST_EXPR_TYPE:       return CreateTypeExpr(arena, CloneAstType(arena, expr->typeExpr), expr->line, expr->column);
         case AST_EXPR_COMPTIME:
-            return CreateComptimeExpr(CloneAndSpecializeExpr(expr->comptime.inner, bindings, bindingCount),
+            return CreateComptimeExpr(arena, CloneAndSpecializeExpr(arena, expr->comptime.inner, bindings, bindingCount),
                                       expr->line, expr->column);
     }
 
@@ -105,18 +120,17 @@ static const char* SpecializationName(const char* name, const AstConstraint* con
 }
 
 const Symbol* SpecializeGenericFunction(Compiler* compiler, const Symbol* symbol, TypedExpr** loweredArgs,
-                                        const size_t argCount, const SymbolTable* scope,
-                                        const uint32_t line, const uint32_t column) {
+                                        const size_t argCount, const uint32_t line, const uint32_t column) {
     const AstDecl* valueDecl = symbol->valueDecl;
-    const AstType* constrained = symbol->typeDecl->typeAnnotation;
-    const AstType* targetType = constrained->constrained.targetType;
-    const size_t constraintCount = constrained->constrained.constraintCount;
-    const AstConstraint* constraints = constrained->constrained.constraints;
-
     if (!valueDecl) {
         CompilerError(compiler, line, column, "Generic function '%s' has no definition", symbol->name);
         return nullptr;
     }
+
+    const AstType* constrained = symbol->typeDecl->typeAnnotation;
+    const AstType* targetType = constrained->constrained.targetType;
+    const size_t constraintCount = constrained->constrained.constraintCount;
+    const AstConstraint* constraints = constrained->constrained.constraints;
 
     Table typeParamMap;
     TableInit(&typeParamMap);
@@ -127,6 +141,10 @@ const Symbol* SpecializeGenericFunction(Compiler* compiler, const Symbol* symbol
         signature = signature->function.returnType;
     }
 
+    // Instances are chosen at the call site; the body is lowered in the
+    // module that defines the generic function.
+    const CompilerModule* callerModule = compiler->module;
+    const CompilerModule* templateModule = ModuleOfDecl(compiler, valueDecl);
     const Symbol* result = nullptr;
     InstanceBinding* bindings = ALLOCATE(InstanceBinding, constraintCount);
 
@@ -140,7 +158,9 @@ const Symbol* SpecializeGenericFunction(Compiler* compiler, const Symbol* symbol
             goto cleanup;
         }
 
+        EnterModule(compiler, templateModule);
         const AstDecl* instance = LookupInstance(compiler, constraints[i].interfaceName, concreteType);
+        EnterModule(compiler, callerModule);
         if (!instance) {
             CompilerError(compiler, line, column, "Type '%s' does not implement interface '%s'",
                           TypeToString(concreteType), constraints[i].interfaceName);
@@ -149,11 +169,12 @@ const Symbol* SpecializeGenericFunction(Compiler* compiler, const Symbol* symbol
         bindings[i] = (InstanceBinding){ .typeParam = typeParam, .instanceDecl = instance };
     }
 
+    EnterModule(compiler, templateModule);
     const char* specName = SpecializationName(symbol->name, constraints, constraintCount, &typeParamMap);
-    result = SymbolTableLookup(compiler->globals, specName);
+    result = SymbolTableLookupCurrentScope(compiler->globals, specName);
     if (result) goto cleanup;
 
-    SymbolTable* instScope = CreateSymbolTable((SymbolTable*)scope);
+    SymbolTable* instScope = CreateSymbolTable(compiler->globals);
     for (size_t i = 0; i < constraintCount; i++) {
         LanceType* concreteType = (LanceType*)TableGet(&typeParamMap, constraints[i].typeParam);
         SymbolTableInsert(instScope, constraints[i].typeParam, SYMBOL_TYPE, concreteType, nullptr);
@@ -164,24 +185,18 @@ const Symbol* SpecializeGenericFunction(Compiler* compiler, const Symbol* symbol
 
     // Registered before lowering the body so the specialization can call itself.
     SymbolTableInsert(compiler->globals, specName, SYMBOL_VALUE, specSignature, nullptr);
+    const Symbol* specialization = SymbolTableLookupCurrentScope(compiler->globals, specName);
 
-    AstExpr* specializedBody = CloneAndSpecializeExpr(valueDecl->body, bindings, constraintCount);
-
-    const char* callerFile = compiler->currentFile;
-    compiler->currentFile = valueDecl->file;
-    const bool lowered = LowerBinding(compiler, specName, valueDecl->params, valueDecl->paramCount,
-                                      specSignature, specializedBody, valueDecl->line, valueDecl->column);
-    compiler->currentFile = callerFile;
-
-    FreeExprAst(specializedBody);
-
-    if (lowered) {
-        result = SymbolTableLookup(compiler->globals, specName);
+    AstExpr* specializedBody = CloneAndSpecializeExpr(&compiler->specializations, valueDecl->body, bindings, constraintCount);
+    if (LowerBinding(compiler, specialization->globalName, valueDecl->params, valueDecl->paramCount,
+                     specSignature, specializedBody, valueDecl->line, valueDecl->column)) {
+        result = specialization;
     }
 
 cleanup:
     TableFree(&typeParamMap);
     FREE_ARRAY(InstanceBinding, bindings, constraintCount);
+    EnterModule(compiler, callerModule);
     return result;
 }
 

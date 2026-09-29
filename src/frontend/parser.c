@@ -4,11 +4,11 @@
 
 #include "parser.h"
 #include "diag.h"
-#include "memory.h"
 #include "string_pool.h"
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const char* CopyTokenString(const Parser* parser, const Token token) {
@@ -51,8 +51,9 @@ static void Advance(Parser* parser) {
     }
 }
 
-void InitializeParser(Parser* parser, Lexer* lexer, const char* fileName) {
+void InitializeParser(Parser* parser, Lexer* lexer, const char* fileName, Arena* arena) {
     parser->lexer = lexer;
+    parser->arena = arena;
     parser->fileName = fileName;
     parser->hadError = false;
     parser->panicMode = false;
@@ -127,14 +128,14 @@ static AstType* ParsePrimitiveType(Parser* parser) {
         const char* identifier = CopyTokenString(parser, parser->current);
         Advance(parser);
 
-        return CreateNamedTypeAst(identifier, line, column);
+        return CreateNamedTypeAst(parser->arena, identifier, line, column);
     }
 
     if (Check(parser, TOKEN_IDENT)) {
         const char* identifier = CopyTokenString(parser, parser->current);
         Advance(parser);
 
-        return CreateNamedTypeAst(identifier, line, column);
+        return CreateNamedTypeAst(parser->arena, identifier, line, column);
     }
 
     // Anonymous struct types : { field :: Type, ... }
@@ -142,7 +143,7 @@ static AstType* ParsePrimitiveType(Parser* parser) {
         size_t capacity = 4;
         size_t count = 0;
 
-        AstFieldDecl* fields = ALLOCATE(AstFieldDecl, capacity);
+        AstFieldDecl* fields = ARENA_ARRAY(parser->arena, AstFieldDecl, capacity);
 
         while (!Check(parser, TOKEN_RBRACE) && !Check(parser, TOKEN_EOF)) {
             const char* fieldName = ParseFieldName(parser);
@@ -154,9 +155,8 @@ static AstType* ParsePrimitiveType(Parser* parser) {
             AstType* fieldType = ParseType(parser);
 
             if (count >= capacity) {
-                const size_t oldCap = capacity;
-                capacity = GROW_CAPACITY(oldCap);
-                fields = GROW_ARRAY(AstFieldDecl, fields, oldCap, capacity);
+                capacity *= 2;
+                fields = GrowAstArray(parser->arena, fields, count, capacity, sizeof(AstFieldDecl));
             }
 
             fields[count++] = (AstFieldDecl) { .name = fieldName, .type = fieldType };
@@ -168,20 +168,20 @@ static AstType* ParsePrimitiveType(Parser* parser) {
 
         Consume(parser, TOKEN_RBRACE, "Expected '}' after struct fields");
 
-        return CreateStructTypeAst(fields, count, line, column);
+        return CreateStructTypeAst(parser->arena, fields, count, line, column);
     }
 
     // Parenthesized type: ( T )
 	if (Match(parser, TOKEN_LPAREN)) {
 		if (Match(parser, TOKEN_RPAREN)) {
-			return CreateNamedTypeAst("()", line, column);
+			return CreateNamedTypeAst(parser->arena, "()", line, column);
 		}
 
 		// Check if this begins an interface constraint list: (Ident Ident, ...)
 		if (Check(parser, TOKEN_IDENT) && CheckPeek(parser, TOKEN_IDENT)) {
 			size_t capacity = 4;
 			size_t count = 0;
-			AstConstraint* constraints = ALLOCATE(AstConstraint, capacity);
+			AstConstraint* constraints = ARENA_ARRAY(parser->arena, AstConstraint, capacity);
 
 			while (Check(parser, TOKEN_IDENT) && CheckPeek(parser, TOKEN_IDENT)) {
 				const char* ifaceName = CopyTokenString(parser, parser->current);
@@ -190,9 +190,8 @@ static AstType* ParsePrimitiveType(Parser* parser) {
 				Advance(parser);
 
 				if (count >= capacity) {
-					size_t oldCap = capacity;
-					capacity = GROW_CAPACITY(capacity);
-					constraints = GROW_ARRAY(AstConstraint, constraints, oldCap, capacity);
+					capacity *= 2;
+					constraints = GrowAstArray(parser->arena, constraints, count, capacity, sizeof(AstConstraint));
 				}
 
 				constraints[count++] = (AstConstraint){
@@ -207,7 +206,7 @@ static AstType* ParsePrimitiveType(Parser* parser) {
 
 			Consume(parser, TOKEN_RPAREN, "Expected ')' after interface constraints");
 
-			return CreateConstrainedTypeAst(constraints, count, nullptr, line, column);
+			return CreateConstrainedTypeAst(parser->arena, constraints, count, nullptr, line, column);
 		}
 
 		AstType* inner = ParseType(parser);
@@ -239,7 +238,7 @@ static AstType* ParseType(Parser* parser) {
     // T1 -> T2
     if (Match(parser, TOKEN_ARROW)) {
         AstType* right = ParseType(parser);
-        return CreateFunctionTypeAst(left, right, line, column);
+        return CreateFunctionTypeAst(parser->arena, left, right, line, column);
     }
 
     return left;
@@ -257,41 +256,69 @@ static AstExpr* ParsePrimaryExpr(Parser* parser) {
 
     AstExpr* expr;
 
+    // if c then a else b: each part extends up to the next keyword, so the
+    // else branch extends as far right as possible.
+    if (Match(parser, TOKEN_IF)) {
+        AstExpr* condition = ParseExpr(parser);
+        if (!Consume(parser, TOKEN_THEN, "Expected 'then' after if condition")) return nullptr;
+        AstExpr* thenBranch = ParseExpr(parser);
+        if (!Consume(parser, TOKEN_ELSE, "Expected 'else' after then branch")) return nullptr;
+        AstExpr* elseBranch = ParseExpr(parser);
+        if (!condition || !thenBranch || !elseBranch) return nullptr;
+        return CreateIfExpr(parser->arena, condition, thenBranch, elseBranch, line, column);
+    }
+
+    // let name = value in body
+    if (Match(parser, TOKEN_LET)) {
+        if (!Check(parser, TOKEN_IDENT)) {
+            Consume(parser, TOKEN_IDENT, "Expected name after 'let'");
+            return nullptr;
+        }
+        const char* name = CopyTokenString(parser, parser->current);
+        Advance(parser);
+        if (!Consume(parser, TOKEN_EQUAL, "Expected '=' after let name")) return nullptr;
+        AstExpr* value = ParseExpr(parser);
+        if (!Consume(parser, TOKEN_IN, "Expected 'in' after let value")) return nullptr;
+        AstExpr* body = ParseExpr(parser);
+        if (!value || !body) return nullptr;
+        return CreateLetExpr(parser->arena, name, value, body, line, column);
+    }
+
     // Integer literal
     if (Check(parser, TOKEN_INT_LIT)) {
         const int64_t val = strtoll(&parser->lexer->source[parser->current.begin], nullptr, 10);
         Advance(parser);
-        expr = CreateIntLitExpr(val, line, column);
+        expr = CreateIntLitExpr(parser->arena, val, line, column);
     // Float literal
     } else if (Check(parser, TOKEN_FLOAT_LIT)) {
         const double val = strtod(&parser->lexer->source[parser->current.begin], nullptr);
         Advance(parser);
-        expr = CreateFloatLitExpr(val, line, column);
+        expr = CreateFloatLitExpr(parser->arena, val, line, column);
     // String literal
     } else if (Check(parser, TOKEN_STRING_LIT)) {
         const char* str = CopyStringToken(parser, parser->current);
         Advance(parser);
-        expr = CreateStringLitExpr(str, line, column);
+        expr = CreateStringLitExpr(parser->arena, str, line, column);
     // Boolean literal
     } else if (Check(parser, TOKEN_BOOL_LIT)) {
         const bool val = (parser->current.end - parser->current.begin == 4); // "true" vs "false"
         Advance(parser);
-        expr = CreateBoolLitExpr(val, line, column);
+        expr = CreateBoolLitExpr(parser->arena, val, line, column);
     // Identifier or Operator
     } else if (Check(parser, TOKEN_IDENT) || IsOperatorToken(parser->current.type) || IsTypeKeywordToken(parser->current.type)) {
         const char* identifier = CopyTokenString(parser, parser->current);
         Advance(parser);
-        expr = CreateIdentExpr(identifier, line, column);
+        expr = CreateIdentExpr(parser->arena, identifier, line, column);
     // Anonymous struct type
     } else if (Check(parser, TOKEN_LBRACE)) {
         AstType* type = ParseType(parser);
-        expr = CreateTypeExpr(type, line, column);
+        expr = CreateTypeExpr(parser->arena, type, line, column);
     // Struct literal
     } else if (Match(parser, TOKEN_DOT_LBRACE)) {
         size_t capacity = 4;
         size_t count = 0;
 
-        AstFieldValue* fields = ALLOCATE(AstFieldValue, capacity);
+        AstFieldValue* fields = ARENA_ARRAY(parser->arena, AstFieldValue, capacity);
 
         while (!Check(parser, TOKEN_RBRACE) && !Check(parser, TOKEN_EOF)) {
             const char* fieldName = ParseFieldName(parser);
@@ -303,9 +330,8 @@ static AstExpr* ParsePrimaryExpr(Parser* parser) {
             AstExpr* val = ParseExpr(parser);
 
             if (count >= capacity) {
-                const size_t oldCap = capacity;
-                capacity = GROW_CAPACITY(oldCap);
-                fields = GROW_ARRAY(AstFieldValue, fields, oldCap, capacity);
+                capacity *= 2;
+                fields = GrowAstArray(parser->arena, fields, count, capacity, sizeof(AstFieldValue));
             }
 
             fields[count++] = (AstFieldValue) { .name = fieldName, .value = val };
@@ -317,11 +343,11 @@ static AstExpr* ParsePrimaryExpr(Parser* parser) {
 
         Consume(parser, TOKEN_RBRACE, "Expected '}' after struct value");
 
-        expr = CreateStructValueExpr(fields, count, line, column);
+        expr = CreateStructValueExpr(parser->arena, fields, count, line, column);
     // Comptime expression
     } else if (Match(parser, TOKEN_BACKTICK)) {
         AstExpr* inner = ParsePrimaryExpr(parser);
-        expr = CreateComptimeExpr(inner, line, column);
+        expr = CreateComptimeExpr(parser->arena, inner, line, column);
     // Parenthesized sub-expression
     } else if (Match(parser, TOKEN_LPAREN)) {
         expr = ParseExpr(parser);
@@ -338,7 +364,7 @@ static AstExpr* ParsePrimaryExpr(Parser* parser) {
             break;
         }
 
-        expr = CreateFieldAccessExpr(expr, fieldName, line, column);
+        expr = CreateFieldAccessExpr(parser->arena, expr, fieldName, line, column);
     }
 
     return expr;
@@ -356,6 +382,8 @@ static bool CanStartExpr(const TokenType type) {
         type == TOKEN_BACKTICK ||
         type == TOKEN_LPAREN ||
         type == TOKEN_LBRACE ||
+        type == TOKEN_IF ||
+        type == TOKEN_LET ||
         IsTypeKeywordToken(type);
 }
 
@@ -364,7 +392,8 @@ static bool CanTakeArguments(const AstExpr* expr) {
         return false;
     }
 
-    if (expr->kind == AST_EXPR_TYPE || expr->kind == AST_EXPR_STRUCT_VALUE) {
+    if (expr->kind == AST_EXPR_TYPE || expr->kind == AST_EXPR_STRUCT_VALUE ||
+        expr->kind == AST_EXPR_IF || expr->kind == AST_EXPR_LET) {
         return false;
     }
 
@@ -410,7 +439,7 @@ static AstExpr* ParseExpr(Parser* parser) {
             break;
         }
 
-        callee = CreateCallExpr(callee, arg, callee->line, callee->column);
+        callee = CreateCallExpr(parser->arena, callee, arg, callee->line, callee->column);
     }
 
     return callee;
@@ -420,7 +449,6 @@ static AstDecl ParseImportDeclaration(Parser* parser) {
     AstDecl decl = {0};
     decl.kind = AST_DECL_IMPORT;
     decl.file = parser->fileName;
-    decl.name = CopyTokenString(parser, parser->current);
     decl.line = parser->current.line;
     decl.column = parser->current.column;
     Advance(parser);
@@ -450,13 +478,12 @@ static AstDecl ParseDeclaration(Parser* parser) {
 
     size_t capacity = 4;
     size_t paramCount = 0;
-    const char** params = ALLOCATE(const char*, capacity);
+    const char** params = ARENA_ARRAY(parser->arena, const char*, capacity);
 
     while (CanBeParam(parser->current.type)) {
         if (paramCount >= capacity) {
-            const size_t oldCap = capacity;
-            capacity = GROW_CAPACITY(oldCap);
-            params = GROW_ARRAY(const char*, params, oldCap, capacity);
+            capacity *= 2;
+            params = GrowAstArray(parser->arena, params, paramCount, capacity, sizeof(const char*));
         }
 
         params[paramCount++] = CopyTokenString(parser, parser->current);
@@ -494,20 +521,19 @@ static void Synchronize(Parser* parser, const uint32_t declarationLine) {
 }
 
 AstModule* ParseModule(Parser* parser) {
-    AstModule* module = ALLOCATE(AstModule, 1);
+    AstModule* module = ARENA_NEW(parser->arena, AstModule);
     size_t capacity = 8;
-    module->count = 0;
-    module->declarations = ALLOCATE(AstDecl, capacity);
+    module->file = parser->fileName;
+    module->declarations = ARENA_ARRAY(parser->arena, AstDecl, capacity);
 
     while (!Check(parser, TOKEN_EOF)) {
         if (module->count >= capacity) {
-            const size_t oldCap = capacity;
-            capacity = GROW_CAPACITY(oldCap);
-            module->declarations = GROW_ARRAY(AstDecl, module->declarations, oldCap, capacity);
+            capacity *= 2;
+            module->declarations = GrowAstArray(parser->arena, module->declarations, module->count, capacity, sizeof(AstDecl));
         }
 
         const uint32_t declarationLine = parser->current.line;
-        if (Check(parser, TOKEN_IDENT) && strcmp(CopyTokenString(parser, parser->current), "import") == 0) {
+        if (Check(parser, TOKEN_IMPORT)) {
             module->declarations[module->count++] = ParseImportDeclaration(parser);
         } else {
             module->declarations[module->count++] = ParseDeclaration(parser);

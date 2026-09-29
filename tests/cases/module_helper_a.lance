@@ -1,0 +1,9 @@
+helper :: i32
+helper = 1
+
+twice :: i32 -> i32
+twice x = *# x 2
+
+-- expect: 1
+main :: i32
+main = helper

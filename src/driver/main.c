@@ -18,7 +18,7 @@ static int Run(const char* path, const char* argv0) {
 
     Compiler compiler;
     InitializeCompiler(&compiler);
-    TypedModule* typedModule = CompileModule(&compiler, program.module);
+    TypedModule* typedModule = CompileProgram(&compiler, program.modules.items, program.modules.count);
     if (!typedModule) {
         fprintf(stderr, "Compilation failed with %zu error(s).\n", DiagErrorCount());
         FreeCompiler(&compiler);

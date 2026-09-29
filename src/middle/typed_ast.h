@@ -14,9 +14,27 @@ typedef enum {
     TYPED_EXPR_STRING_LIT,
     TYPED_EXPR_VAR,
     TYPED_EXPR_CALL,
+    TYPED_EXPR_IF,
+    TYPED_EXPR_LET,
     TYPED_EXPR_FIELD_ACCESS,
     TYPED_EXPR_STRUCT_INIT
 } TypedExprKind;
+
+// Where a variable's value lives at runtime. The compiler resolves every
+// reference, so the interpreter indexes arrays instead of looking up names.
+typedef enum {
+    SLOT_LOCAL,  // Call frame: the parameters, then the `let` bindings
+    SLOT_GLOBAL, // TypedModule.declarations
+    SLOT_NATIVE, // Native functions, see NativeId in primitives.h
+    SLOT_TYPE,   // A primitive type used as a value; has no storage
+} SlotKind;
+
+typedef struct {
+    SlotKind kind;
+    size_t index;
+} SlotRef;
+
+#define SLOT_REF(slotKind, slotIndex) ((SlotRef){ .kind = (slotKind), .index = (slotIndex) })
 
 typedef struct TypedExpr TypedExpr;
 
@@ -35,12 +53,30 @@ struct TypedExpr {
         double floatVal;
         bool boolVal;
         const char* stringVal;
-        const char* varName;
+
+        // Globals are created with an unresolved index and resolved by name
+        // once the whole module is lowered (see ResolveGlobalSlots).
+        struct {
+            const char* name;
+            SlotRef slot;
+        } var;
 
         struct {
             TypedExpr* callee;
             TypedExpr* argument;
         } call;
+
+        struct {
+            TypedExpr* condition;
+            TypedExpr* thenBranch;
+            TypedExpr* elseBranch;
+        } conditional;
+
+        struct {
+            size_t slot; // SLOT_LOCAL index the value is stored in
+            TypedExpr* value;
+            TypedExpr* body;
+        } let;
 
         struct {
             TypedExpr* target;
@@ -61,6 +97,7 @@ typedef struct {
     LanceType* type;
     const char** params;
     size_t paramCount;
+    size_t frameSize; // Local slots needed by a call: the parameters plus every `let`
     TypedExpr* body;
     uint32_t line;
     uint32_t column;
@@ -77,8 +114,10 @@ TypedExpr* CreateTypedIntLitExpr(int64_t val, LanceType* type, uint32_t line, ui
 TypedExpr* CreateTypedFloatLitExpr(double val, LanceType* type, uint32_t line, uint32_t column);
 TypedExpr* CreateTypedBoolLitExpr(bool val, LanceType* type, uint32_t line, uint32_t column);
 TypedExpr* CreateTypedStringLitExpr(const char* val, LanceType* type, uint32_t line, uint32_t column);
-TypedExpr* CreateTypedVarExpr(const char* varName, LanceType* type, uint32_t line, uint32_t column);
+TypedExpr* CreateTypedVarExpr(const char* name, SlotRef slot, LanceType* type, uint32_t line, uint32_t column);
 TypedExpr* CreateTypedCallExpr(TypedExpr* callee, TypedExpr* argument, LanceType* type, uint32_t line, uint32_t column);
+TypedExpr* CreateTypedIfExpr(TypedExpr* condition, TypedExpr* thenBranch, TypedExpr* elseBranch, LanceType* type, uint32_t line, uint32_t column);
+TypedExpr* CreateTypedLetExpr(size_t slot, TypedExpr* value, TypedExpr* body, uint32_t line, uint32_t column);
 TypedExpr* CreateTypedFieldAccessExpr(TypedExpr* target, const char* fieldName, size_t fieldIndex, LanceType* type, uint32_t line, uint32_t column);
 TypedExpr* CreateTypedStructInitExpr(LanceType* structType, TypedFieldValue* fields, size_t fieldCount, uint32_t line, uint32_t column);
 

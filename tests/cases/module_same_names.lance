@@ -1,0 +1,7 @@
+import "module_helper_a.lance"
+import "module_helper_b.lance"
+
+-- Both modules declare `helper` (and `main`) without clashing.
+-- expect: 3
+main :: i32
+main = +# module_helper_a.helper module_helper_b.helper

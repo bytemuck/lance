@@ -41,10 +41,11 @@ TypedExpr* CreateTypedStringLitExpr(const char* val, LanceType* type, uint32_t l
     return expr;
 }
 
-TypedExpr* CreateTypedVarExpr(const char* varName, LanceType* type, uint32_t line, uint32_t column) {
+TypedExpr* CreateTypedVarExpr(const char* name, const SlotRef slot, LanceType* type, uint32_t line, uint32_t column) {
     TypedExpr* expr = AllocateTypedExprNode(TYPED_EXPR_VAR, type, line, column);
     if (!expr) return nullptr;
-    expr->varName = varName;
+    expr->var.name = name;
+    expr->var.slot = slot;
     return expr;
 }
 
@@ -53,6 +54,24 @@ TypedExpr* CreateTypedCallExpr(TypedExpr* callee, TypedExpr* argument, LanceType
     if (!expr) return nullptr;
     expr->call.callee = callee;
     expr->call.argument = argument;
+    return expr;
+}
+
+TypedExpr* CreateTypedIfExpr(TypedExpr* condition, TypedExpr* thenBranch, TypedExpr* elseBranch, LanceType* type, uint32_t line, uint32_t column) {
+    TypedExpr* expr = AllocateTypedExprNode(TYPED_EXPR_IF, type, line, column);
+    if (!expr) return nullptr;
+    expr->conditional.condition = condition;
+    expr->conditional.thenBranch = thenBranch;
+    expr->conditional.elseBranch = elseBranch;
+    return expr;
+}
+
+TypedExpr* CreateTypedLetExpr(size_t slot, TypedExpr* value, TypedExpr* body, uint32_t line, uint32_t column) {
+    TypedExpr* expr = AllocateTypedExprNode(TYPED_EXPR_LET, body ? body->type : nullptr, line, column);
+    if (!expr) return nullptr;
+    expr->let.slot = slot;
+    expr->let.value = value;
+    expr->let.body = body;
     return expr;
 }
 
@@ -88,6 +107,17 @@ void FreeTypedExpr(TypedExpr* expr) {
         case TYPED_EXPR_CALL:
             FreeTypedExpr(expr->call.callee);
             FreeTypedExpr(expr->call.argument);
+            break;
+
+        case TYPED_EXPR_IF:
+            FreeTypedExpr(expr->conditional.condition);
+            FreeTypedExpr(expr->conditional.thenBranch);
+            FreeTypedExpr(expr->conditional.elseBranch);
+            break;
+
+        case TYPED_EXPR_LET:
+            FreeTypedExpr(expr->let.value);
+            FreeTypedExpr(expr->let.body);
             break;
 
         case TYPED_EXPR_FIELD_ACCESS:

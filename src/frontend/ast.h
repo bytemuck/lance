@@ -5,9 +5,10 @@
 #ifndef LANCE_AST_H
 #define LANCE_AST_H
 
+#include <stddef.h>
 #include <stdint.h>
-#include <stdlib.h>
 
+#include "arena.h"
 #include "token.h"
 
 typedef struct {
@@ -68,6 +69,8 @@ typedef enum {
     AST_EXPR_BOOL_LIT,
     AST_EXPR_IDENT,
     AST_EXPR_CALL,
+    AST_EXPR_IF,
+    AST_EXPR_LET,
     AST_EXPR_FIELD_ACCESS,
     AST_EXPR_STRUCT_VALUE,
     AST_EXPR_COMPTIME,
@@ -99,6 +102,20 @@ struct AstExpr {
             AstExpr* callee;
             AstExpr* argument;
         } call;
+
+        // if condition then thenBranch else elseBranch
+        struct {
+            AstExpr* condition;
+            AstExpr* thenBranch;
+            AstExpr* elseBranch;
+        } conditional;
+
+        // let name = value in body
+        struct {
+            const char* name;
+            AstExpr* value;
+            AstExpr* body;
+        } let;
 
         // Field access: target.field
         struct {
@@ -141,31 +158,48 @@ typedef struct {
     };
 } AstDecl;
 
+typedef struct AstModule AstModule;
+
+// `import "util.lance"` resolved to the loaded module, visible as `util`.
 typedef struct {
+    const char* alias;
+    AstModule* module;
+} AstImport;
+
+// One source file. The parser fills in the declarations; the module loader
+// fills in the name and the resolved imports.
+struct AstModule {
+    const char* file; // Name used in diagnostics
+    const char* name; // Qualifies the module's globals at runtime; null for the entry module
     AstDecl* declarations;
     size_t count;
-} AstModule;
+    AstImport* imports;
+    size_t importCount;
+};
 
-AstType* CreateNamedTypeAst(const char* name, uint32_t line, uint32_t column);
-AstType* CreateFunctionTypeAst(AstType* paramType, AstType* returnType, uint32_t line, uint32_t column);
-AstType* CreateStructTypeAst(AstFieldDecl* fields, size_t fieldCount, uint32_t line, uint32_t column);
-AstType* CreateConstrainedTypeAst(AstConstraint* constraints, size_t count, AstType* targetType, uint32_t line, uint32_t column);
-AstType* CloneAstType(const AstType* type);
-void FreeTypeAst(AstType* type);
+// AST nodes and their arrays belong to arena, not to individual parents.
+// Keep the arena and interned strings alive through all AST consumers; release
+// all nodes (including those from partial parses) with FreeArena afterwards.
+// Growing an array leaves its previous storage in the arena until FreeArena.
+void* GrowAstArray(Arena* arena, const void* items, size_t oldCount, size_t newCount, size_t itemSize);
 
-AstExpr* CreateIntLitExpr(int64_t value, uint32_t line, uint32_t column);
-AstExpr* CreateFloatLitExpr(double value, uint32_t line, uint32_t column);
-AstExpr* CreateStringLitExpr(const char* value, uint32_t line, uint32_t column);
-AstExpr* CreateBoolLitExpr(bool value, uint32_t line, uint32_t column);
-AstExpr* CreateIdentExpr(const char* name, uint32_t line, uint32_t column);
-AstExpr* CreateTypeExpr(AstType* type, uint32_t line, uint32_t column);
-AstExpr* CreateCallExpr(AstExpr* callee, AstExpr* args, uint32_t line, uint32_t column);
-AstExpr* CreateFieldAccessExpr(AstExpr* base, const char* fieldName, uint32_t line, uint32_t column);
-AstExpr* CreateStructValueExpr(AstFieldValue* fields, size_t fieldCount, uint32_t line, uint32_t column);
-AstExpr* CreateComptimeExpr(AstExpr* expr, uint32_t line, uint32_t column);
-void FreeExprAst(AstExpr* expr);
+AstType* CreateNamedTypeAst(Arena* arena, const char* name, uint32_t line, uint32_t column);
+AstType* CreateFunctionTypeAst(Arena* arena, AstType* paramType, AstType* returnType, uint32_t line, uint32_t column);
+AstType* CreateStructTypeAst(Arena* arena, AstFieldDecl* fields, size_t fieldCount, uint32_t line, uint32_t column);
+AstType* CreateConstrainedTypeAst(Arena* arena, AstConstraint* constraints, size_t count, AstType* targetType, uint32_t line, uint32_t column);
+AstType* CloneAstType(Arena* arena, const AstType* type);
 
-void FreeDeclAst(AstDecl* decl);
-void FreeModuleAst(AstModule* module);
+AstExpr* CreateIntLitExpr(Arena* arena, int64_t value, uint32_t line, uint32_t column);
+AstExpr* CreateFloatLitExpr(Arena* arena, double value, uint32_t line, uint32_t column);
+AstExpr* CreateStringLitExpr(Arena* arena, const char* value, uint32_t line, uint32_t column);
+AstExpr* CreateBoolLitExpr(Arena* arena, bool value, uint32_t line, uint32_t column);
+AstExpr* CreateIdentExpr(Arena* arena, const char* name, uint32_t line, uint32_t column);
+AstExpr* CreateTypeExpr(Arena* arena, AstType* type, uint32_t line, uint32_t column);
+AstExpr* CreateCallExpr(Arena* arena, AstExpr* callee, AstExpr* args, uint32_t line, uint32_t column);
+AstExpr* CreateIfExpr(Arena* arena, AstExpr* condition, AstExpr* thenBranch, AstExpr* elseBranch, uint32_t line, uint32_t column);
+AstExpr* CreateLetExpr(Arena* arena, const char* name, AstExpr* value, AstExpr* body, uint32_t line, uint32_t column);
+AstExpr* CreateFieldAccessExpr(Arena* arena, AstExpr* base, const char* fieldName, uint32_t line, uint32_t column);
+AstExpr* CreateStructValueExpr(Arena* arena, AstFieldValue* fields, size_t fieldCount, uint32_t line, uint32_t column);
+AstExpr* CreateComptimeExpr(Arena* arena, AstExpr* expr, uint32_t line, uint32_t column);
 
 #endif //LANCE_AST_H
