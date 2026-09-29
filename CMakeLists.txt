@@ -1,35 +1,51 @@
-cmake_minimum_required(VERSION 4.4)
+cmake_minimum_required(VERSION 3.20)
 project(lance C)
 
 set(CMAKE_C_STANDARD 23)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-add_executable(lance src/main.c
-        src/file.c
-        src/file.h
-        src/token.c
-        src/token.h
-        src/lexer.c
-        src/lexer.h
-        src/parser.c
-        src/parser.h
-        src/ast.c
-        src/ast.h
-        src/type.c
-        src/type.h
-        src/symbol.c
-        src/symbol.h
-        src/typed_ast.c
-        src/typed_ast.h
-        src/compiler.c
-        src/compiler.h
-        src/value.c
-        src/value.h
-        src/interpreter.c
-        src/interpreter.h
-        src/memory.c
-        src/memory.h
-        src/string_pool.c
-        src/string_pool.h
-        src/table.c
-        src/table.h
+option(LANCE_ENABLE_SANITIZERS "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+option(LANCE_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+
+# Every .c file below src/ is part of the interpreter. Adding a new source
+# file only requires re-running CMake, not editing this list.
+file(GLOB_RECURSE LANCE_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/*.c")
+
+add_executable(lance ${LANCE_SOURCES})
+
+target_include_directories(lance PRIVATE
+        src/support
+        src/frontend
+        src/middle
+        src/middle/compiler
+        src/runtime
+        src/driver
 )
+
+target_compile_options(lance PRIVATE -Wall -Wextra -Wpedantic)
+if (LANCE_WARNINGS_AS_ERRORS)
+    target_compile_options(lance PRIVATE -Werror)
+endif ()
+
+if (LANCE_ENABLE_SANITIZERS)
+    target_compile_options(lance PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(lance PRIVATE -fsanitize=address,undefined)
+endif ()
+
+# The standard library is looked up next to the executable at runtime.
+add_custom_command(TARGET lance POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_SOURCE_DIR}/resources/std"
+                "$<TARGET_FILE_DIR:lance>/std")
+
+enable_testing()
+file(GLOB LANCE_TESTS CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tests/cases/*.lance")
+foreach (test_file ${LANCE_TESTS})
+    get_filename_component(test_name ${test_file} NAME_WE)
+    add_test(NAME ${test_name}
+            COMMAND ${CMAKE_COMMAND}
+                    -DLANCE=$<TARGET_FILE:lance>
+                    -DTEST_FILE=${test_file}
+                    -P ${CMAKE_SOURCE_DIR}/tests/run_test.cmake)
+endforeach ()

@@ -1,0 +1,5 @@
+import "num.lance"
+
+-- expect: 3.000000
+main :: f64
+main = + 1.5 1.5

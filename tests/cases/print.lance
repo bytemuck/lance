@@ -1,0 +1,4 @@
+-- expect: Hello from Lance!
+-- expect: ()
+main :: ()
+main = print "Hello from Lance!"

@@ -1,0 +1,11 @@
+-- expect-error: error_multiple_syntax_errors.lance:8:9:
+-- expect-error: error_multiple_syntax_errors.lance:11:10:
+-- expect-error: Parsing failed with 2 error(s)
+main :: i32
+main = 1
+
+first :: i32
+first = )
+
+second :: i32
+second = )

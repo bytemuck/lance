@@ -1,0 +1,5 @@
+import "num.lance"
+
+-- expect-error: Division by zero
+main :: i32
+main = // 1 0

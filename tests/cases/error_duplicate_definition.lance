@@ -1,0 +1,4 @@
+-- expect-error: Duplicate definition of 'main'
+main :: i32
+main = 1
+main = 2

@@ -1,0 +1,2 @@
+-- expect-error: missing explicit type annotation
+main = 1

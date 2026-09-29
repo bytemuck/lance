@@ -1,0 +1,3 @@
+-- expect-error: Unterminated string
+main :: string
+main = "abc

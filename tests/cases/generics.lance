@@ -1,0 +1,11 @@
+import "num.lance"
+
+square :: (Numeric T) => T -> T
+square x = * x x
+
+sumSquares :: (Numeric T) => T -> T -> T
+sumSquares a b = + (square a) (square b)
+
+-- expect: 25
+main :: i32
+main = sumSquares 3 4

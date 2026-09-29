@@ -1,0 +1,9 @@
+-- expect-error: Definition of 'a' depends on itself
+a :: i32
+a = b
+
+b :: i32
+b = a
+
+main :: i32
+main = a

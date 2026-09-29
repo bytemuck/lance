@@ -1,0 +1,5 @@
+import "num.lance"
+
+-- expect: 3
+main :: i64
+main = // 7 2
