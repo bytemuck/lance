@@ -315,6 +315,16 @@ static Value *EvalLet(Interpreter *interp, const TypedExpr *expr, Slots *frame) 
 	return EvalTypedExpr(interp, expr->let.body, frame);
 }
 
+static Value *EvalIf(Interpreter *interp, const TypedExpr *expr, Slots *frame) {
+	Value *condition = EvalTypedExpr(interp, expr->ifExpr.condition, frame);
+	if (!condition)
+		return nullptr;
+
+	const bool taken = condition->boolVal;
+	FreeValue(condition);
+	return EvalTypedExpr(interp, taken ? expr->ifExpr.thenBranch : expr->ifExpr.elseBranch, frame);
+}
+
 static Value *EvalTypedExpr(Interpreter *interp, const TypedExpr *expr, Slots *frame) {
 	if (!expr || interp->hadError)
 		return nullptr;
@@ -338,6 +348,8 @@ static Value *EvalTypedExpr(Interpreter *interp, const TypedExpr *expr, Slots *f
 			return EvalCall(interp, expr, frame);
 		case TYPED_EXPR_LET:
 			return EvalLet(interp, expr, frame);
+		case TYPED_EXPR_IF:
+			return EvalIf(interp, expr, frame);
 	}
 
 	return nullptr;

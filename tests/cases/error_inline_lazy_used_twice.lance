@@ -1,0 +1,6 @@
+-- expect-error: Lazy parameter 'x' of inline function 'twice' is used more than once
+twice :: lazy i32 -> inline i32
+twice x = +# x x
+
+main :: i32
+main = twice 1

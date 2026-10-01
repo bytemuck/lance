@@ -43,6 +43,14 @@ TypedExpr *LowerExpr(Compiler *compiler, const AstExpr *expr, const SymbolTable 
 bool	   LowerBinding(Compiler *compiler, const char *name, const char *const *params, size_t paramCount,
 						LanceType *signature, const AstExpr *body, uint32_t line, uint32_t column);
 
+bool LowerGlobalValue(Compiler *compiler, Symbol *symbol);
+
+const TypedDecl *FindTypedDecl(const TypedModule *module, const char *name);
+bool			 ValidateInlineBody(Compiler *compiler, const char *displayName, const TypedDecl *decl);
+// Replaces a fully applied call of `decl` by its body. Takes ownership of `args`.
+TypedExpr *ExpandInlineCall(Compiler *compiler, const TypedDecl *decl, TypedExpr **args, uint32_t line,
+							uint32_t column);
+
 void ResolveGlobalSlots(Compiler *compiler, TypedModule *module);
 
 #endif // LANCE_COMPILER_INTERNAL_H

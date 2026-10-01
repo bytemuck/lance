@@ -56,6 +56,8 @@ const char *TokenTypeToString(const TokenType type) {
 			return "'in'";
 		case TOKEN_LAZY:
 			return "'lazy'";
+		case TOKEN_INLINE:
+			return "'inline'";
 
 		// Syntax & Punctuation
 		case TOKEN_COLON_COLON:

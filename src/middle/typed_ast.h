@@ -15,6 +15,7 @@ typedef enum {
 	TYPED_EXPR_VAR,
 	TYPED_EXPR_CALL,
 	TYPED_EXPR_LET,
+	TYPED_EXPR_IF,
 	TYPED_EXPR_FIELD_ACCESS,
 	TYPED_EXPR_STRUCT_INIT
 } TypedExprKind;
@@ -70,6 +71,13 @@ struct TypedExpr {
 			TypedExpr *body;
 		} let;
 
+		// Only the selected branch runs; `type` is the type of both branches.
+		struct {
+			TypedExpr *condition;
+			TypedExpr *thenBranch;
+			TypedExpr *elseBranch;
+		} ifExpr;
+
 		struct {
 			TypedExpr  *target;
 			size_t		fieldIndex;
@@ -108,10 +116,24 @@ TypedExpr *CreateTypedStringLitExpr(const char *val, LanceType *type, uint32_t l
 TypedExpr *CreateTypedVarExpr(const char *name, SlotRef slot, LanceType *type, uint32_t line, uint32_t column);
 TypedExpr *CreateTypedCallExpr(TypedExpr *callee, TypedExpr *argument, LanceType *type, uint32_t line, uint32_t column);
 TypedExpr *CreateTypedLetExpr(size_t slot, TypedExpr *value, TypedExpr *body, uint32_t line, uint32_t column);
+TypedExpr *CreateTypedIfExpr(TypedExpr *condition, TypedExpr *thenBranch, TypedExpr *elseBranch, LanceType *type,
+							 uint32_t line, uint32_t column);
 TypedExpr *CreateTypedFieldAccessExpr(TypedExpr *target, const char *fieldName, size_t fieldIndex, LanceType *type,
 									  uint32_t line, uint32_t column);
 TypedExpr *CreateTypedStructInitExpr(LanceType *structType, TypedFieldValue *fields, size_t fieldCount, uint32_t line,
 									 uint32_t column);
+
+// Copies `expr` into a new tree. Slots below `paramCount` are replaced by a copy of
+// `arguments[slot]`; every other local slot moves to `localBase + slot - paramCount`.
+typedef struct {
+	size_t			  paramCount;
+	TypedExpr *const *arguments;
+	size_t			  localBase;
+} TypedSubstitution;
+
+TypedExpr *CloneTypedExpr(const TypedExpr *expr);
+TypedExpr *SubstituteTypedExpr(const TypedExpr *expr, const TypedSubstitution *substitution);
+size_t	   CountLocalSlotUses(const TypedExpr *expr, size_t slot);
 
 void FreeTypedExpr(TypedExpr *expr);
 void FreeTypedDecl(TypedDecl *decl);

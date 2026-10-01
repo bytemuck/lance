@@ -145,6 +145,7 @@ static const struct {
 		{.word = "let", .type = TOKEN_LET},
 		{.word = "in", .type = TOKEN_IN},
 		{.word = "lazy", .type = TOKEN_LAZY},
+		{.word = "inline", .type = TOKEN_INLINE},
 };
 
 static Token LexIdentifier(Lexer *lexer) {

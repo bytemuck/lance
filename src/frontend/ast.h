@@ -18,6 +18,7 @@ typedef enum {
 	AST_TYPE_STRUCT,	  // e.g. '{ x :: T, y :: T }'
 	AST_TYPE_CONSTRAINED, // e.g. (Interface T) => ReturnType
 	AST_TYPE_LAZY,		  // e.g. 'lazy T', only valid as a parameter type
+	AST_TYPE_INLINE,	  // e.g. 'inline T', only valid as the final return type of a function
 } AstTypeKind;
 
 typedef struct AstType AstType;
@@ -54,6 +55,11 @@ struct AstType {
 		struct {
 			AstType *inner;
 		} lazy;
+
+		// AST_TYPE_INLINE
+		struct {
+			AstType *inner;
+		} inlineType;
 
 		// AST_TYPE_CONSTRAINED
 		struct {
@@ -177,6 +183,7 @@ AstType *CreateStructTypeAst(Arena *arena, AstFieldDecl *fields, size_t fieldCou
 AstType *CreateConstrainedTypeAst(Arena *arena, AstConstraint *constraints, size_t count, AstType *targetType,
 								  uint32_t line, uint32_t column);
 AstType *CreateLazyTypeAst(Arena *arena, AstType *inner, uint32_t line, uint32_t column);
+AstType *CreateInlineTypeAst(Arena *arena, AstType *inner, uint32_t line, uint32_t column);
 AstType *CloneAstType(Arena *arena, const AstType *type);
 
 AstExpr *CreateIntLitExpr(Arena *arena, int64_t value, uint32_t line, uint32_t column);

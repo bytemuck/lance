@@ -47,6 +47,11 @@ LanceType *ResolveAstType(Compiler *compiler, const AstType *astType, const Symb
 						  "'lazy' is only allowed on a function parameter, as in 'lazy T -> R'");
 			return nullptr;
 
+		case AST_TYPE_INLINE:
+			CompilerError(compiler, astType->line, astType->column,
+						  "'inline' is only allowed on the final return type of a function, as in 'A -> inline R'");
+			return nullptr;
+
 		case AST_TYPE_STRUCT: {
 			const size_t	 count	= astType->structType.fieldCount;
 			StructFieldType *fields = ARENA_ARRAY(&compiler->types, StructFieldType, count);

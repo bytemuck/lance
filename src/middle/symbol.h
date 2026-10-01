@@ -18,6 +18,12 @@ typedef enum {
 	SYMBOL_BUILTIN,		  // Primitive operator or native function provided by the runtime
 } SymbolKind;
 
+typedef enum {
+	LOWER_PENDING,	   // The body has not been lowered yet
+	LOWER_IN_PROGRESS, // The body is being lowered right now
+	LOWER_DONE,		   // The body was lowered, or failed to lower
+} LowerState;
+
 typedef struct Symbol {
 	const char	  *name;
 	const char	  *globalName; // Unique in the program: `name`, or `module.name` in an imported module
@@ -27,6 +33,8 @@ typedef struct Symbol {
 	AstDecl		  *typeDecl;  // The `name :: T` annotation, if any
 	AstDecl		  *valueDecl; // The `name ... = body` binding, if any
 	const AstType *generic;	  // (Constraints) => T
+	bool		   isInline;   // `... -> inline T`: fully applied calls are expanded in place
+	LowerState	   lowerState; // Lets an inline expansion find its body, or detect recursion
 } Symbol;
 
 typedef struct SymbolTable SymbolTable;

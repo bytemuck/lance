@@ -1,0 +1,6 @@
+import "bool.lance"
+
+-- Nested inline conditionals expand into nested branches; the unchosen ones never run.
+-- expect: 3
+main :: i32
+main = if false (//# 1 0) (if true 3 (//# 1 0))

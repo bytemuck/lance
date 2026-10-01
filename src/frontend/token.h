@@ -40,6 +40,7 @@ typedef enum {
 	TOKEN_LET,	  // 'let'
 	TOKEN_IN,	  // 'in'
 	TOKEN_LAZY,	  // 'lazy', a parameter type modifier
+	TOKEN_INLINE, // 'inline', a return type modifier
 
 	// Operators & Punctuation
 	TOKEN_COLON_COLON, // ::

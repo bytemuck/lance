@@ -1,6 +1,7 @@
 #include "compiler_internal.h"
 #include "diag.h"
 #include "memory.h"
+#include "symbol.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -271,6 +272,10 @@ static void CollectImplicitTypeParams(const Compiler *compiler, const AstType *t
 			CollectImplicitTypeParams(compiler, type->lazy.inner, params);
 			return;
 
+		case AST_TYPE_INLINE:
+			CollectImplicitTypeParams(compiler, type->inlineType.inner, params);
+			return;
+
 		case AST_TYPE_STRUCT:
 			for (size_t i = 0; i < type->structType.fieldCount; i++) {
 				CollectImplicitTypeParams(compiler, type->structType.fields[i].type, params);
@@ -309,6 +314,60 @@ static const AstType *GenericSignature(Compiler *compiler, const AstType *annota
 	return generic;
 }
 
+// `A -> B -> inline R` marks a function as inline. Returns the annotation without
+// the marker, so the rest of the compiler sees an ordinary function type. Any
+// `inline` left elsewhere is reported when the type is resolved.
+static const AstType *StripInlineReturn(Compiler *compiler, const AstType *type, bool *isInline) {
+	if (!type)
+		return nullptr;
+
+	switch (type->kind) {
+		case AST_TYPE_CONSTRAINED: {
+			const AstType *target = StripInlineReturn(compiler, type->constrained.targetType, isInline);
+			if (target == type->constrained.targetType)
+				return type;
+			return CreateConstrainedTypeAst(&compiler->specializations, type->constrained.constraints,
+											type->constrained.constraintCount, (AstType *) target, type->line,
+											type->column);
+		}
+
+		case AST_TYPE_FUNCTION: {
+			const AstType *returnType = type->function.returnType;
+			const AstType *stripped	  = nullptr;
+			if (returnType && returnType->kind == AST_TYPE_INLINE) {
+				*isInline = true;
+				stripped  = returnType->inlineType.inner;
+			} else {
+				stripped = StripInlineReturn(compiler, returnType, isInline);
+			}
+			if (stripped == returnType)
+				return type;
+			return CreateFunctionTypeAst(&compiler->specializations, type->function.paramType, (AstType *) stripped,
+										 type->line, type->column);
+		}
+
+		case AST_TYPE_INLINE:
+			CompilerError(compiler, type->line, type->column, "'inline' is only allowed on the final return type of a function, as in 'A -> inline R'");
+			return type->inlineType.inner;
+
+		default:
+			return type;
+	}
+}
+
+// The number of parameters a signature declares, such as 3 for `bool -> lazy T -> lazy T -> inline T`.
+static size_t SignatureArity(const AstType *type) {
+	if (type && type->kind == AST_TYPE_CONSTRAINED)
+		type = type->constrained.targetType;
+
+	size_t arity = 0;
+	while (type && type->kind == AST_TYPE_FUNCTION) {
+		arity++;
+		type = type->function.returnType;
+	}
+	return arity;
+}
+
 static void CollectValueSignatures(Compiler *compiler, const ClassifiedDeclList *decls) {
 	for (size_t i = 0; i < decls->count; i++) {
 		if (decls->items[i].role != DECL_ROLE_VALUE_SIGNATURE)
@@ -326,10 +385,15 @@ static void CollectValueSignatures(Compiler *compiler, const ClassifiedDeclList 
 			continue;
 		}
 
-		const AstType *generic = GenericSignature(compiler, decl->typeAnnotation);
-		LanceType	  *type	   = ResolveAstType(compiler, generic ? generic : decl->typeAnnotation, compiler->globals);
+		bool		   isInline	  = false;
+		const AstType *annotation = StripInlineReturn(compiler, decl->typeAnnotation, &isInline);
+		const AstType *generic	  = GenericSignature(compiler, annotation);
+		LanceType	  *type		  = ResolveAstType(compiler, generic ? generic : annotation, compiler->globals);
 		SymbolTableInsert(compiler->globals, decl->name, SYMBOL_VALUE, type, (AstDecl *) decl);
-		SymbolTableLookupCurrentScope(compiler->globals, decl->name)->generic = generic;
+
+		Symbol *symbol	 = SymbolTableLookupCurrentScope(compiler->globals, decl->name);
+		symbol->generic	 = generic;
+		symbol->isInline = isInline;
 	}
 }
 
@@ -351,6 +415,14 @@ static void AttachValueBodies(Compiler *compiler, const ClassifiedDeclList *decl
 			continue;
 		}
 		symbol->valueDecl = (AstDecl *) decl;
+
+		// Expansion substitutes every parameter, so the binding must name all of them.
+		if (symbol->isInline && decl->paramCount != SignatureArity(symbol->typeDecl->typeAnnotation)) {
+			CompilerError(compiler, decl->line, decl->column,
+						  "Inline function '%s' must bind all %zu parameters of its type", decl->name,
+						  SignatureArity(symbol->typeDecl->typeAnnotation));
+			symbol->isInline = false;
+		}
 	}
 }
 
@@ -361,12 +433,13 @@ static void LowerValues(Compiler *compiler, const ClassifiedDeclList *decls) {
 		const AstDecl *decl = decls->items[i].decl;
 		EnterModule(compiler, decls->items[i].module);
 
-		const Symbol *symbol = SymbolTableLookupCurrentScope(compiler->globals, decl->name);
+		Symbol *symbol = SymbolTableLookupCurrentScope(compiler->globals, decl->name);
 		if (!symbol || symbol->valueDecl != decl || symbol->generic || !symbol->type)
 			continue;
 
-		LowerBinding(compiler, symbol->globalName, decl->params, decl->paramCount, symbol->type, decl->body, decl->line,
-					 decl->column);
+		// An inline function may have been lowered already, when a call to it was expanded.
+		if (symbol->lowerState == LOWER_PENDING)
+			LowerGlobalValue(compiler, symbol);
 	}
 }
 

@@ -1,0 +1,6 @@
+-- expect-error: Inline function 'loop' cannot be recursive
+loop :: i32 -> inline i32
+loop n = loop n
+
+main :: i32
+main = loop 1

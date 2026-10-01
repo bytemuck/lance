@@ -1,4 +1,4 @@
-if :: bool -> lazy T -> lazy T -> T
+if :: bool -> lazy T -> lazy T -> inline T
 if condition whenTrue whenFalse = if# condition whenTrue whenFalse
 
 and :: bool -> lazy bool -> bool

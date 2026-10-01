@@ -40,6 +40,12 @@ AstType *CreateLazyTypeAst(Arena *arena, AstType *inner, const uint32_t line, co
 	return node;
 }
 
+AstType *CreateInlineTypeAst(Arena *arena, AstType *inner, const uint32_t line, const uint32_t column) {
+	AstType *node		   = AllocateTypeNode(arena, AST_TYPE_INLINE, line, column);
+	node->inlineType.inner = inner;
+	return node;
+}
+
 AstType *CloneAstType(Arena *arena, const AstType *type) {
 	if (!type)
 		return nullptr;
@@ -54,6 +60,9 @@ AstType *CloneAstType(Arena *arena, const AstType *type) {
 
 		case AST_TYPE_LAZY:
 			return CreateLazyTypeAst(arena, CloneAstType(arena, type->lazy.inner), type->line, type->column);
+
+		case AST_TYPE_INLINE:
+			return CreateInlineTypeAst(arena, CloneAstType(arena, type->inlineType.inner), type->line, type->column);
 
 		case AST_TYPE_STRUCT: {
 			const size_t  count	 = type->structType.fieldCount;

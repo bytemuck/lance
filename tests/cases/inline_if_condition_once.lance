@@ -1,0 +1,8 @@
+import "bool.lance"
+
+-- The call to the inline `if` runs the condition once, then only the chosen branch.
+-- expect: condition
+-- expect: then
+-- expect: 1
+main :: i32
+main = if (let u = print "condition" in true) (let v = print "then" in 1) (let w = print "else" in 2)

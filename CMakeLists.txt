@@ -49,3 +49,10 @@ foreach (test_file ${LANCE_TESTS})
                     -DTEST_FILE=${test_file}
                     -P ${CMAKE_SOURCE_DIR}/tests/run_test.cmake)
 endforeach ()
+
+add_test(NAME dump_ast
+        COMMAND ${CMAKE_COMMAND}
+                -DLANCE=$<TARGET_FILE:lance>
+                -DSOURCE=${CMAKE_SOURCE_DIR}/tests/dump/sum_to.lance
+                -DOUT_DIR=${CMAKE_BINARY_DIR}/dump_ast_test
+                -P ${CMAKE_SOURCE_DIR}/tests/run_dump_test.cmake)

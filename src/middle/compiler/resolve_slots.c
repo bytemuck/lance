@@ -29,6 +29,12 @@ static void ResolveExpr(Compiler *compiler, const Table *globals, const TypedMod
 			ResolveExpr(compiler, globals, module, expr->let.body);
 			return;
 
+		case TYPED_EXPR_IF:
+			ResolveExpr(compiler, globals, module, expr->ifExpr.condition);
+			ResolveExpr(compiler, globals, module, expr->ifExpr.thenBranch);
+			ResolveExpr(compiler, globals, module, expr->ifExpr.elseBranch);
+			return;
+
 		case TYPED_EXPR_FIELD_ACCESS:
 			ResolveExpr(compiler, globals, module, expr->fieldAccess.target);
 			return;

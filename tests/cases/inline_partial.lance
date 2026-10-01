@@ -1,0 +1,10 @@
+import "bool.lance"
+
+add :: i32 -> i32 -> inline i32
+add a b = +# a b
+
+-- A call that is not fully applied still uses the compiled function.
+-- expect: 3
+-- expect: 1
+main :: i32
+main = let plus = add 1 in let a = print (plus 2) in if true 1 2

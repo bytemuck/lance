@@ -1,0 +1,6 @@
+-- expect-error: Inline function 'add' must bind all 2 parameters of its type
+add :: i32 -> i32 -> inline i32
+add a = +# a
+
+main :: i32
+main = 1

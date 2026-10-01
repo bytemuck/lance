@@ -34,13 +34,6 @@ static bool IsPrimitiveOperatorType(const PrimitiveInfo *primitive, const LanceT
 		   TypesAreEqual(right->function.returnType, PrimitiveResultType(primitive, operand));
 }
 
-// bool -> lazy T -> lazy T -> T
-static LanceType *NewIfPrimitiveType(Compiler *compiler, LanceType *branchType) {
-	LanceType *elseType = CreateLazyFunctionType(&compiler->types, branchType, branchType);
-	LanceType *thenType = CreateLazyFunctionType(&compiler->types, branchType, elseType);
-	return NewFunctionType(compiler, GetTypeBool(), thenType);
-}
-
 static bool IsIfPrimitiveType(const LanceType *type) {
 	if (!type || type->kind != TYPE_FUNCTION || type->function.lazyParam ||
 		!TypesAreEqual(type->function.paramType, GetTypeBool())) {
@@ -358,13 +351,7 @@ static TypedExpr *LowerPrimitiveIf(Compiler *compiler, const AstExpr *expr, cons
 		goto invalid;
 	}
 
-	LanceType *ifType = NewIfPrimitiveType(compiler, thenBranch->type);
-	TypedExpr *result = LowerExpr(compiler, spine->root, scope, ifType);
-	TypedExpr *args[] = {condition, thenBranch, elseBranch};
-	for (size_t i = 0; i < 3; i++) {
-		result = CreateTypedCallExpr(result, args[i], result->type->function.returnType, expr->line, expr->column);
-	}
-	return result;
+	return CreateTypedIfExpr(condition, thenBranch, elseBranch, thenBranch->type, expr->line, expr->column);
 
 invalid:
 	FreeTypedExpr(condition);
@@ -426,6 +413,34 @@ static TypedExpr *LowerInterfaceBinary(Compiler *compiler, const AstExpr *expr, 
 
 static bool IsGeneric(const Symbol *symbol) { return symbol && symbol->kind == SYMBOL_VALUE && symbol->generic; }
 
+// Only a call that supplies every parameter is expanded; a partial application keeps calling the function.
+static bool IsExpandableInline(const Symbol *symbol, const size_t argCount) {
+	return symbol && symbol->kind == SYMBOL_VALUE && symbol->isInline && symbol->valueDecl &&
+		   symbol->valueDecl->paramCount == argCount;
+}
+
+// Replaces the call of the inline function `symbol` by its body. Takes ownership of `args`.
+static TypedExpr *ExpandInlineBody(Compiler *compiler, Symbol *symbol, const char *displayName, TypedExpr **args,
+								   const size_t argCount, const uint32_t line, const uint32_t column) {
+	const TypedDecl *decl = nullptr;
+	if (symbol->lowerState == LOWER_IN_PROGRESS) {
+		CompilerError(compiler, line, column,
+					  "Inline function '%s' cannot be recursive, directly or through other inline functions",
+					  displayName);
+	} else {
+		if (symbol->lowerState == LOWER_PENDING)
+			LowerGlobalValue(compiler, symbol);
+		decl = FindTypedDecl(compiler->typedModule, symbol->globalName);
+	}
+
+	if (!decl) {
+		for (size_t i = 0; i < argCount; i++)
+			FreeTypedExpr(args[i]);
+		return nullptr;
+	}
+	return ExpandInlineCall(compiler, decl, args, line, column);
+}
+
 static const AstType *StripLazy(const AstType *type) {
 	return type && type->kind == AST_TYPE_LAZY ? type->lazy.inner : type;
 }
@@ -480,8 +495,6 @@ static TypedExpr *LowerGenericCall(Compiler *compiler, const AstExpr *expr, cons
 		return nullptr;
 	}
 
-	TypedExpr *result = CreateTypedVarExpr(specialization->globalName, SLOT_REF(SLOT_GLOBAL, 0), specialization->type,
-										   spine->root->line, spine->root->column);
 	LanceType *signature = specialization->type;
 	size_t	   applied	 = 0;
 	for (; applied < spine->argCount; applied++) {
@@ -492,17 +505,55 @@ static TypedExpr *LowerGenericCall(Compiler *compiler, const AstExpr *expr, cons
 		if (!CheckArgumentType(compiler, spine->args[applied], signature->function.paramType, args[applied])) {
 			break;
 		}
-		result = CreateTypedCallExpr(result, args[applied], signature->function.returnType, expr->line, expr->column);
 		signature = signature->function.returnType;
 	}
 
 	if (applied < spine->argCount) {
-		FreeTypedExpr(result);
-		for (size_t i = applied; i < spine->argCount; i++)
+		for (size_t i = 0; i < spine->argCount; i++)
 			FreeTypedExpr(args[i]);
-		result = nullptr;
+		FREE_ARRAY(TypedExpr *, args, spine->argCount);
+		return nullptr;
 	}
 
+	TypedExpr *result = nullptr;
+	if (IsExpandableInline(symbol, spine->argCount)) {
+		result = ExpandInlineBody(compiler, (Symbol *) specialization, symbol->name, args, spine->argCount, expr->line,
+								  expr->column);
+	} else {
+		result = CreateTypedVarExpr(specialization->globalName, SLOT_REF(SLOT_GLOBAL, 0), specialization->type,
+									spine->root->line, spine->root->column);
+		signature = specialization->type;
+		for (size_t i = 0; i < spine->argCount; i++) {
+			result = CreateTypedCallExpr(result, args[i], signature->function.returnType, expr->line, expr->column);
+			signature = signature->function.returnType;
+		}
+	}
+
+	FREE_ARRAY(TypedExpr *, args, spine->argCount);
+	return result;
+}
+
+// Ordinary call `f a b` of a non-generic function: an inline function is expanded instead.
+static TypedExpr *LowerInlineCall(Compiler *compiler, const AstExpr *expr, const CallSpine *spine, Symbol *symbol,
+								  const SymbolTable *scope) {
+	TypedExpr **args		= ALLOCATE(TypedExpr *, spine->argCount);
+	bool		argError	= false;
+	LanceType  *signature	= symbol->type;
+	for (size_t i = 0; i < spine->argCount; i++) {
+		LanceType *paramType = signature && signature->kind == TYPE_FUNCTION ? signature->function.paramType : nullptr;
+		args[i]				 = LowerExpr(compiler, spine->args[i], scope, paramType);
+		if (!args[i] || !paramType || !CheckArgumentType(compiler, spine->args[i], paramType, args[i]))
+			argError = true;
+		signature = signature && signature->kind == TYPE_FUNCTION ? signature->function.returnType : nullptr;
+	}
+
+	TypedExpr *result = nullptr;
+	if (argError) {
+		for (size_t i = 0; i < spine->argCount; i++)
+			FreeTypedExpr(args[i]);
+	} else {
+		result = ExpandInlineBody(compiler, symbol, symbol->name, args, spine->argCount, expr->line, expr->column);
+	}
 	FREE_ARRAY(TypedExpr *, args, spine->argCount);
 	return result;
 }
@@ -564,6 +615,9 @@ static TypedExpr *LowerCall(Compiler *compiler, const AstExpr *expr, const Symbo
 																		 : nullptr;
 		if (IsGeneric(symbol)) {
 			result	= LowerGenericCall(compiler, expr, &spine, symbol, scope, expectedType);
+			handled = true;
+		} else if (IsExpandableInline(symbol, spine.argCount) && symbol->type) {
+			result	= LowerInlineCall(compiler, expr, &spine, (Symbol *) symbol, scope);
 			handled = true;
 		}
 	}
@@ -681,4 +735,23 @@ failed:
 	FreeSymbolTable(localScope);
 	compiler->frameSize = outerFrameSize;
 	return false;
+}
+
+bool LowerGlobalValue(Compiler *compiler, Symbol *symbol) {
+	const AstDecl *decl = symbol->valueDecl;
+
+	// Lowering an inline function's body can expand a call that lowers another one, so restore the caller's module.
+	const CompilerModule *callerModule = compiler->module;
+	EnterModule(compiler, ModuleOfDecl(compiler, decl));
+	symbol->lowerState = LOWER_IN_PROGRESS;
+
+	bool lowered = LowerBinding(compiler, symbol->globalName, decl->params, decl->paramCount, symbol->type, decl->body,
+								decl->line, decl->column);
+	if (lowered && symbol->isInline) {
+		lowered = ValidateInlineBody(compiler, symbol->name, FindTypedDecl(compiler->typedModule, symbol->globalName));
+	}
+
+	symbol->lowerState = LOWER_DONE;
+	EnterModule(compiler, callerModule);
+	return lowered;
 }

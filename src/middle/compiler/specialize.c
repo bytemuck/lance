@@ -101,6 +101,9 @@ static bool DeduceTypeParam(const AstType *astParamType, LanceType *concreteType
 		case AST_TYPE_LAZY:
 			return DeduceTypeParam(astParamType->lazy.inner, concreteType, typeParamMap, conflict);
 
+		case AST_TYPE_INLINE:
+			return DeduceTypeParam(astParamType->inlineType.inner, concreteType, typeParamMap, conflict);
+
 		case AST_TYPE_FUNCTION:
 			if (concreteType->kind != TYPE_FUNCTION)
 				return true;
@@ -216,12 +219,19 @@ const Symbol *SpecializeGenericFunction(Compiler *compiler, const Symbol *symbol
 
 	// Registered before lowering the body so the specialization can call itself.
 	SymbolTableInsert(compiler->globals, specName, SYMBOL_VALUE, specSignature, nullptr);
-	const Symbol *specialization = SymbolTableLookupCurrentScope(compiler->globals, specName);
+	Symbol *specialization		= SymbolTableLookupCurrentScope(compiler->globals, specName);
+	specialization->lowerState	= LOWER_IN_PROGRESS;
 
 	AstExpr *specializedBody =
 			CloneAndSpecializeExpr(&compiler->specializations, valueDecl->body, bindings, constraintCount);
-	if (LowerBinding(compiler, specialization->globalName, valueDecl->params, valueDecl->paramCount, specSignature,
-					 specializedBody, valueDecl->line, valueDecl->column)) {
+	const bool lowered = LowerBinding(compiler, specialization->globalName, valueDecl->params, valueDecl->paramCount,
+									  specSignature, specializedBody, valueDecl->line, valueDecl->column);
+	specialization->lowerState = LOWER_DONE;
+	if (lowered && symbol->isInline) {
+		const TypedDecl *decl = FindTypedDecl(compiler->typedModule, specialization->globalName);
+		if (ValidateInlineBody(compiler, symbol->name, decl))
+			result = specialization;
+	} else if (lowered) {
 		result = specialization;
 	}
 

@@ -120,6 +120,12 @@ static AstType *ParsePrimitiveType(Parser *parser) {
 		return inner ? CreateLazyTypeAst(parser->arena, inner, line, column) : nullptr;
 	}
 
+	// inline T: marks the final return type of a function, like `lazy` binds tighter than `->`
+	if (Match(parser, TOKEN_INLINE)) {
+		AstType *inner = ParsePrimitiveType(parser);
+		return inner ? CreateInlineTypeAst(parser->arena, inner, line, column) : nullptr;
+	}
+
 	// Primitive keyword or identifier name
 	if (parser->current.type > TOKEN_KEYWORD_IMPL_MINIMUM && parser->current.type < TOKEN_KEYWORD_IMPL_MAXIMUM) {
 		const char *identifier = CopyTokenString(parser, parser->current);
