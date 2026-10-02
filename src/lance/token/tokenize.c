@@ -118,15 +118,12 @@ static const struct {
 static const struct {
 	const char*	 string;
 	LNCTokenKind type;
-} kKeywords[] = {{.string = "if", .type = LNC_TOKEN_IF},	   {.string = "else", .type = LNC_TOKEN_ELSE},
-				 {.string = "then", .type = LNC_TOKEN_THEN},   {.string = "let", .type = LNC_TOKEN_LET},
-				 {.string = "in", .type = LNC_TOKEN_IN},	   {.string = "true", .type = LNC_TOKEN_TRUE},
-				 {.string = "false", .type = LNC_TOKEN_FALSE}, {.string = "i8", .type = LNC_TOKEN_I8},
-				 {.string = "i16", .type = LNC_TOKEN_I16},	   {.string = "i32", .type = LNC_TOKEN_I32},
-				 {.string = "i64", .type = LNC_TOKEN_I64},	   {.string = "u8", .type = LNC_TOKEN_U8},
-				 {.string = "u16", .type = LNC_TOKEN_U16},	   {.string = "u32", .type = LNC_TOKEN_U32},
-				 {.string = "u64", .type = LNC_TOKEN_U64},	   {.string = "f32", .type = LNC_TOKEN_F32},
-				 {.string = "f64", .type = LNC_TOKEN_F64}};
+} kKeywords[] = {{.string = "if", .type = LNC_TOKEN_IF},	   {.string = "else", .type = LNC_TOKEN_ELSE}, {.string = "then", .type = LNC_TOKEN_THEN},
+				 {.string = "let", .type = LNC_TOKEN_LET},	   {.string = "in", .type = LNC_TOKEN_IN},	   {.string = "true", .type = LNC_TOKEN_TRUE},
+				 {.string = "false", .type = LNC_TOKEN_FALSE}, {.string = "i8", .type = LNC_TOKEN_I8},	   {.string = "i16", .type = LNC_TOKEN_I16},
+				 {.string = "i32", .type = LNC_TOKEN_I32},	   {.string = "i64", .type = LNC_TOKEN_I64},   {.string = "u8", .type = LNC_TOKEN_U8},
+				 {.string = "u16", .type = LNC_TOKEN_U16},	   {.string = "u32", .type = LNC_TOKEN_U32},   {.string = "u64", .type = LNC_TOKEN_U64},
+				 {.string = "f32", .type = LNC_TOKEN_F32},	   {.string = "f64", .type = LNC_TOKEN_F64}};
 
 bool lncAlpha(char c) {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';

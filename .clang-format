@@ -26,7 +26,7 @@ BraceWrapping:
 BreakBeforeBraces: Attach
 BreakConstructorInitializers: BeforeComma
 BreakConstructorInitializersBeforeComma: false
-ColumnLimit: 120
+ColumnLimit: 180
 ContinuationIndentWidth: 8
 IndentCaseLabels: true
 IndentWidth: 4

@@ -9,8 +9,7 @@ int main() {
 
 	LNCToken token = lncTokenize(&tokenizer);
 	while (token.kind != LNC_TOKEN_END_OF_FILE) {
-		printf("TokenID: '%d' with Lexeme: '%s' and span: (%d:%d)\n", token.kind, token.lexeme.items, token.span.begin,
-			   token.span.end);
+		printf("TokenID: '%d' with Lexeme: '%s' and span: (%d:%d)\n", token.kind, token.lexeme.items, token.span.begin, token.span.end);
 
 		lncFreeToken(&token);
 		token = lncTokenize(&tokenizer);
