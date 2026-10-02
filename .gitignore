@@ -1,4 +1,2 @@
-.junie
-.idea
-cmake-*
+.vscode/
 build/

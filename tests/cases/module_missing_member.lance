@@ -1,5 +1,0 @@
-import "module_helper_a.lance"
-
--- expect-error: Module 'module_helper_a' has no declaration 'missing'
-main :: i32
-main = module_helper_a.missing

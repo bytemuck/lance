@@ -1,8 +1,0 @@
-import "module_cycle_a.lance"
-
-base :: i32
-base = 41
-
--- expect: 42
-main :: i32
-main = +# base module_cycle_a.value

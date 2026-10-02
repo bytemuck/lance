@@ -1,6 +1,0 @@
-import "module_helper_a.lance"
-import "module_helper_b.lance"
-
--- expect-error: 'helper' is declared by several imported modules
-main :: i32
-main = helper

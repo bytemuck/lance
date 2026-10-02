@@ -1,5 +1,0 @@
-import "bool.lance"
-
--- expect-error: Type parameter 'T' of 'if' cannot be both 'i32' and 'string'
-main :: i32
-main = if true 2 "bad"

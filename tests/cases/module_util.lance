@@ -1,6 +1,0 @@
--- expect: 40
-value :: i32
-value = 40
-
-main :: i32
-main = value

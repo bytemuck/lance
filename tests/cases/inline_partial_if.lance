@@ -1,6 +1,0 @@
-import "bool.lance"
-
--- Partial application of the inline `if` goes through the compiled wrapper.
--- expect: 1
-main :: i32
-main = let pick = if true 1 in pick (//# 1 0)

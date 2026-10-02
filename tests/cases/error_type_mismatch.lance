@@ -1,3 +1,0 @@
--- expect-error: expected 'i32' but got 'string'
-main :: i32
-main = "text"

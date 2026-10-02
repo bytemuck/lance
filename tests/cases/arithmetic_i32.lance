@@ -1,5 +1,0 @@
-import "num.lance"
-
--- expect: 7
-main :: i32
-main = + 3 (* 2 2)

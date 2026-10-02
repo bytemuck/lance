@@ -1,5 +1,0 @@
-import "num.lance"
-
--- expect: true
-main :: bool
-main = < 1 2

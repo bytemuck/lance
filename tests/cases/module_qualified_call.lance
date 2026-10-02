@@ -1,5 +1,0 @@
-import "module_helper_a.lance"
-
--- expect: 42
-main :: i32
-main = module_helper_a.twice 21

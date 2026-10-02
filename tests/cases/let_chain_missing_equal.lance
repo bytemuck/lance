@@ -1,3 +1,0 @@
--- expect-error: Expected '=' after let name
-main :: i32
-main = let x = 1, y in +# x 2

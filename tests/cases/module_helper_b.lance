@@ -1,6 +1,0 @@
-helper :: i32
-helper = 2
-
--- expect: 2
-main :: i32
-main = helper

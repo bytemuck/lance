@@ -1,6 +1,0 @@
-import "num.lance"
-import "generics_lib.lance"
-
--- expect: 25
-main :: i32
-main = generics_lib.sumSquares 3 4

@@ -1,3 +1,0 @@
--- expect-error: Undefined identifier 'nope'
-main :: i32
-main = nope

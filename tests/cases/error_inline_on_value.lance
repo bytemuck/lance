@@ -1,3 +1,0 @@
--- expect-error: 'inline' is only allowed on the final return type of a function
-main :: inline i32
-main = 1

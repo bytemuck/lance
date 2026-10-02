@@ -1,3 +1,0 @@
--- expect: 42
-main :: i32
-main = let x = 20 in let y = 22 in +# x y

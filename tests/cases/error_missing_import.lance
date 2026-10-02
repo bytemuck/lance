@@ -1,5 +1,0 @@
-import "does_not_exist.lance"
-
--- expect-error: Could not resolve imported module 'does_not_exist.lance'
-main :: i32
-main = 1

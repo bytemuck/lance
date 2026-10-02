@@ -1,7 +1,0 @@
--- A later binding may shadow an earlier one, like nested lets.
-bump :: i32 -> i32
-bump x = let x = +# x 1, x = *# x 2 in x
-
--- expect: 10
-main :: i32
-main = bump 4

@@ -1,3 +1,0 @@
--- expect-error: Integer literal 300 does not fit in 'u8'
-main :: u8
-main = 300

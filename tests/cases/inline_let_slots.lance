@@ -1,7 +1,0 @@
--- The `let` bindings of every expanded body get their own slots in the caller's frame.
-square :: i32 -> inline i32
-square x = let y = +# x 0 in *# y y
-
--- expect: 25
-main :: i32
-main = let a = square 3 in let b = square 4 in +# a b

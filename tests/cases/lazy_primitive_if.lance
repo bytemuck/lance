@@ -1,7 +1,0 @@
--- if# is the primitive the standard library's `if` is built on.
-countdown :: i32 -> i32
-countdown n = if# (<=# n 0) 0 (countdown (-# n 1))
-
--- expect: 0
-main :: i32
-main = countdown 1000

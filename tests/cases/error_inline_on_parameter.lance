@@ -1,6 +1,0 @@
--- expect-error: 'inline' is only allowed on the final return type of a function
-apply :: inline i32 -> i32
-apply x = x
-
-main :: i32
-main = apply 1

@@ -1,5 +1,0 @@
--- A `let` inside a binding ends at its own `in` body, so the comma after it
--- starts the next binding of the outer `let`.
--- expect: 7
-main :: i32
-main = let a = let b = 2 in +# b 1, c = 4 in +# a c

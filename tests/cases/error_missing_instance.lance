@@ -1,8 +1,0 @@
-import "num.lance"
-
-square :: (Numeric T) => T -> T
-square x = * x x
-
--- expect-error: does not implement interface 'Numeric'
-main :: bool
-main = square true

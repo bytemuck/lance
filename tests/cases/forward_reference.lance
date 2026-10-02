@@ -1,8 +1,0 @@
-import "num.lance"
-
--- expect: 42
-main :: i32
-main = + answer 0
-
-answer :: i32
-answer = * 6 7

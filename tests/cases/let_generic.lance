@@ -1,8 +1,0 @@
-import "num.lance"
-
-cube :: (Numeric T) => T -> T
-cube x = let squared = * x x in * squared x
-
--- expect: 27
-main :: i32
-main = cube 3

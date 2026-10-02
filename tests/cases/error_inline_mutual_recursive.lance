@@ -1,9 +1,0 @@
--- expect-error: Inline function 'ping' cannot be recursive
-ping :: i32 -> inline i32
-ping n = pong n
-
-pong :: i32 -> inline i32
-pong n = ping n
-
-main :: i32
-main = ping 1

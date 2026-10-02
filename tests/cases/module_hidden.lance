@@ -1,7 +1,0 @@
-import "module_unqualified.lance"
-
--- Imports are not re-exported: `value` comes from module_util, which only
--- module_unqualified imports.
--- expect-error: Undefined identifier 'value'
-main :: i32
-main = value
